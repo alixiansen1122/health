@@ -1,0 +1,240 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { requireAppUser } from "./app-auth";
+import { ensureDatabase, getD1 } from "@/db/runtime";
+
+const today = () => new Date().toISOString().slice(0, 10);
+
+function textValue(formData: FormData, name: string, max = 200) {
+  return String(formData.get(name) ?? "").trim().slice(0, max);
+}
+
+function numberValue(formData: FormData, name: string) {
+  return Number(String(formData.get(name) ?? ""));
+}
+
+function validDate(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+async function memberGroup(groupId: string, userId: string) {
+  const row = await getD1()
+    .prepare("SELECT role FROM group_members WHERE group_id = ? AND user_id = ?")
+    .bind(groupId, userId)
+    .first<{ role: string }>();
+  if (!row) throw new Error("你不是该群组成员");
+  return row;
+}
+
+export async function saveProfile(formData: FormData) {
+  const user = await requireAppUser("/");
+  await ensureDatabase();
+  const displayName = textValue(formData, "displayName", 30);
+  const heightCm = numberValue(formData, "heightCm");
+  const weightKg = numberValue(formData, "weightKg");
+  const shareWeight = formData.get("shareWeight") === "on" ? 1 : 0;
+
+  if (!displayName || heightCm < 80 || heightCm > 250 || weightKg < 20 || weightKg > 400) {
+    throw new Error("请填写有效的姓名、身高和体重");
+  }
+
+  const db = getD1();
+  await db
+    .prepare(`INSERT INTO profiles
+      (user_id, email, display_name, height_cm, current_weight_kg, share_weight)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        email = excluded.email,
+        display_name = excluded.display_name,
+        height_cm = excluded.height_cm,
+        current_weight_kg = excluded.current_weight_kg,
+        share_weight = excluded.share_weight,
+        updated_at = CURRENT_TIMESTAMP`)
+    .bind(user.userId, user.email.toLowerCase(), displayName, heightCm, weightKg, shareWeight)
+    .run();
+
+  await db
+    .prepare(`INSERT INTO weight_entries (id, user_id, record_date, weight_kg)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id, record_date) DO UPDATE SET
+        weight_kg = excluded.weight_kg, updated_at = CURRENT_TIMESTAMP`)
+    .bind(crypto.randomUUID(), user.userId, today(), weightKg)
+    .run();
+
+  revalidatePath("/");
+  redirect("/");
+}
+
+export async function createGroup(formData: FormData) {
+  const user = await requireAppUser("/");
+  await ensureDatabase();
+  const name = textValue(formData, "name", 40);
+  if (!name) throw new Error("请输入群组名称");
+  const groupId = crypto.randomUUID();
+  const inviteCode = crypto.randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase();
+  const db = getD1();
+  await db.batch([
+    db.prepare("INSERT INTO groups (id, name, owner_id, invite_code) VALUES (?, ?, ?, ?)")
+      .bind(groupId, name, user.userId, inviteCode),
+    db.prepare("INSERT INTO group_members (group_id, user_id, role) VALUES (?, ?, 'owner')")
+      .bind(groupId, user.userId),
+  ]);
+  revalidatePath("/");
+  redirect(`/?group=${groupId}`);
+}
+
+export async function inviteMember(formData: FormData) {
+  const user = await requireAppUser("/");
+  await ensureDatabase();
+  const groupId = textValue(formData, "groupId", 80);
+  const email = textValue(formData, "email", 120).toLowerCase();
+  const membership = await memberGroup(groupId, user.userId);
+  if (membership.role !== "owner") throw new Error("只有群主可以邀请成员");
+  if (!/^\S+@\S+\.\S+$/.test(email)) throw new Error("请输入有效邮箱");
+  await getD1()
+    .prepare(`INSERT INTO group_invites (id, group_id, email, invited_by)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(group_id, email) DO UPDATE SET status = 'pending', invited_by = excluded.invited_by`)
+    .bind(crypto.randomUUID(), groupId, email, user.userId)
+    .run();
+  revalidatePath("/");
+}
+
+export async function joinGroup(formData: FormData) {
+  const user = await requireAppUser("/");
+  await ensureDatabase();
+  const inviteCode = textValue(formData, "inviteCode", 20).toUpperCase();
+  const group = await getD1()
+    .prepare("SELECT id FROM groups WHERE invite_code = ?")
+    .bind(inviteCode)
+    .first<{ id: string }>();
+  if (!group) throw new Error("邀请码不存在");
+  await getD1()
+    .prepare("INSERT OR IGNORE INTO group_members (group_id, user_id, role) VALUES (?, ?, 'member')")
+    .bind(group.id, user.userId)
+    .run();
+  revalidatePath("/");
+  redirect(`/?group=${group.id}`);
+}
+
+export async function saveWeight(formData: FormData) {
+  const user = await requireAppUser("/");
+  await ensureDatabase();
+  const date = textValue(formData, "date", 10);
+  const weightKg = numberValue(formData, "weightKg");
+  const note = textValue(formData, "note", 120);
+  if (!validDate(date) || weightKg < 20 || weightKg > 400) throw new Error("请输入有效日期和体重");
+  const db = getD1();
+  await db.batch([
+    db.prepare(`INSERT INTO weight_entries (id, user_id, record_date, weight_kg, note)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, record_date) DO UPDATE SET
+        weight_kg = excluded.weight_kg, note = excluded.note, updated_at = CURRENT_TIMESTAMP`)
+      .bind(crypto.randomUUID(), user.userId, date, weightKg, note),
+    db.prepare("UPDATE profiles SET current_weight_kg = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?")
+      .bind(weightKg, user.userId),
+  ]);
+  revalidatePath("/");
+}
+
+export async function deleteWeight(formData: FormData) {
+  const user = await requireAppUser("/");
+  await ensureDatabase();
+  const id = textValue(formData, "id", 80);
+  await getD1().prepare("DELETE FROM weight_entries WHERE id = ? AND user_id = ?").bind(id, user.userId).run();
+  revalidatePath("/");
+}
+
+export async function saveWorkout(formData: FormData) {
+  const user = await requireAppUser("/");
+  await ensureDatabase();
+  const id = textValue(formData, "id", 80);
+  const groupId = textValue(formData, "groupId", 80);
+  const assigneeId = textValue(formData, "assigneeId", 80) || user.userId;
+  const date = textValue(formData, "date", 10);
+  const activity = textValue(formData, "activity", 80);
+  const notes = textValue(formData, "notes", 200);
+  const rawDuration = numberValue(formData, "durationMinutes");
+  const duration = Number.isFinite(rawDuration) && rawDuration > 0 ? Math.min(rawDuration, 1440) : null;
+  const completed = formData.get("completed") === "on" ? 1 : 0;
+  await memberGroup(groupId, user.userId);
+  await memberGroup(groupId, assigneeId);
+  if (!validDate(date) || !activity) throw new Error("请填写运动日期和项目");
+  const db = getD1();
+  if (id) {
+    await db.prepare(`UPDATE workouts SET user_id = ?, workout_date = ?, activity = ?,
+      duration_minutes = ?, completed = ?, notes = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND group_id = ?`)
+      .bind(assigneeId, date, activity, duration, completed, notes, user.userId, id, groupId).run();
+  } else {
+    await db.prepare(`INSERT INTO workouts
+      (id, group_id, user_id, workout_date, activity, duration_minutes, completed, notes, created_by, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), groupId, assigneeId, date, activity, duration, completed, notes, user.userId, user.userId).run();
+  }
+  revalidatePath("/");
+}
+
+export async function toggleWorkout(formData: FormData) {
+  const user = await requireAppUser("/");
+  await ensureDatabase();
+  const id = textValue(formData, "id", 80);
+  const groupId = textValue(formData, "groupId", 80);
+  await memberGroup(groupId, user.userId);
+  await getD1().prepare(`UPDATE workouts SET completed = CASE completed WHEN 1 THEN 0 ELSE 1 END,
+    updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND group_id = ?`)
+    .bind(user.userId, id, groupId).run();
+  revalidatePath("/");
+}
+
+export async function deleteWorkout(formData: FormData) {
+  const user = await requireAppUser("/");
+  await ensureDatabase();
+  const id = textValue(formData, "id", 80);
+  const groupId = textValue(formData, "groupId", 80);
+  await memberGroup(groupId, user.userId);
+  await getD1().prepare("DELETE FROM workouts WHERE id = ? AND group_id = ?").bind(id, groupId).run();
+  revalidatePath("/");
+}
+
+export async function saveExpense(formData: FormData) {
+  const user = await requireAppUser("/");
+  await ensureDatabase();
+  const id = textValue(formData, "id", 80);
+  const groupId = textValue(formData, "groupId", 80);
+  const payerId = textValue(formData, "payerId", 80) || user.userId;
+  const date = textValue(formData, "date", 10);
+  const item = textValue(formData, "item", 80);
+  const category = textValue(formData, "category", 20) || "其他";
+  const notes = textValue(formData, "notes", 200);
+  const amountCents = Math.round(numberValue(formData, "amount") * 100);
+  await memberGroup(groupId, user.userId);
+  await memberGroup(groupId, payerId);
+  if (!validDate(date) || !item || !Number.isFinite(amountCents) || amountCents <= 0 || amountCents > 100_000_000) {
+    throw new Error("请填写有效的消费日期、内容和金额");
+  }
+  const db = getD1();
+  if (id) {
+    await db.prepare(`UPDATE expenses SET user_id = ?, purchase_date = ?, item = ?, amount_cents = ?,
+      category = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND group_id = ?`)
+      .bind(payerId, date, item, amountCents, category, notes, id, groupId).run();
+  } else {
+    await db.prepare(`INSERT INTO expenses
+      (id, group_id, user_id, purchase_date, item, amount_cents, category, notes, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), groupId, payerId, date, item, amountCents, category, notes, user.userId).run();
+  }
+  revalidatePath("/");
+}
+
+export async function deleteExpense(formData: FormData) {
+  const user = await requireAppUser("/");
+  await ensureDatabase();
+  const id = textValue(formData, "id", 80);
+  const groupId = textValue(formData, "groupId", 80);
+  await memberGroup(groupId, user.userId);
+  await getD1().prepare("DELETE FROM expenses WHERE id = ? AND group_id = ?").bind(id, groupId).run();
+  revalidatePath("/");
+}
