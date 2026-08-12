@@ -43,3 +43,5 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/.site-package-stage/
+/health-site.tar.gz
