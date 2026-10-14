@@ -4,23 +4,23 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "并肩 · 双人健康记录",
-    template: "%s · 并肩",
+    default: "健康与运动",
+    template: "%s · 健康与运动",
   },
-  description: "和重要的人一起记录体重、安排运动、统计健身消费。",
+  description: "个人饮食、运动计划与每日健康记录。",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
   },
   openGraph: {
-    title: "并肩 · 双人健康记录",
-    description: "一起记录，一起变好",
+    title: "健康与运动",
+    description: "记录饮食与运动，看见每天的变化",
     images: ["/og.png"],
   },
   twitter: {
     card: "summary_large_image",
-    title: "并肩 · 双人健康记录",
-    description: "一起记录，一起变好",
+    title: "健康与运动",
+    description: "记录饮食与运动，看见每天的变化",
     images: ["/og.png"],
   },
 };

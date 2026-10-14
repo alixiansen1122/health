@@ -189,7 +189,7 @@ export async function deleteMeal(formData: FormData) {
 }
 
 export async function saveTrainingEntry(formData: FormData) {
-  const user = await requireAppUser("/?view=health");
+  const user = await requireAppUser("/?view=workouts");
   await ensureDatabase();
   const date = textValue(formData, "date", 10);
   const activity = textValue(formData, "activity", 200);
@@ -208,7 +208,7 @@ export async function saveTrainingEntry(formData: FormData) {
 }
 
 export async function toggleTrainingEntry(formData: FormData) {
-  const user = await requireAppUser("/?view=health");
+  const user = await requireAppUser("/?view=workouts");
   await ensureDatabase();
   const id = textValue(formData, "id", 80);
   await getD1().prepare(`UPDATE training_entries
@@ -219,7 +219,7 @@ export async function toggleTrainingEntry(formData: FormData) {
 }
 
 export async function deleteTrainingEntry(formData: FormData) {
-  const user = await requireAppUser("/?view=health");
+  const user = await requireAppUser("/?view=workouts");
   await ensureDatabase();
   const id = textValue(formData, "id", 80);
   await getD1().prepare("DELETE FROM training_entries WHERE id = ? AND user_id = ?")
@@ -228,7 +228,7 @@ export async function deleteTrainingEntry(formData: FormData) {
 }
 
 export async function saveTrainingPlan(formData: FormData) {
-  const user = await requireAppUser("/?view=health");
+  const user = await requireAppUser("/?view=workouts");
   await ensureDatabase();
   const title = textValue(formData, "title", 100);
   const startDate = textValue(formData, "startDate", 10);
@@ -246,7 +246,7 @@ export async function saveTrainingPlan(formData: FormData) {
 }
 
 export async function toggleTrainingPlan(formData: FormData) {
-  const user = await requireAppUser("/?view=health");
+  const user = await requireAppUser("/?view=workouts");
   await ensureDatabase();
   const id = textValue(formData, "id", 80);
   await getD1().prepare(`UPDATE training_plans
@@ -257,7 +257,7 @@ export async function toggleTrainingPlan(formData: FormData) {
 }
 
 export async function deleteTrainingPlan(formData: FormData) {
-  const user = await requireAppUser("/?view=health");
+  const user = await requireAppUser("/?view=workouts");
   await ensureDatabase();
   const id = textValue(formData, "id", 80);
   await getD1().prepare("DELETE FROM training_plans WHERE id = ? AND user_id = ?")

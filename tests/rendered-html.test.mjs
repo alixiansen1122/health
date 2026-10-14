@@ -10,10 +10,10 @@ test("production page replaces the temporary starter", async () => {
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
   ]);
-  assert.match(page, /双人健康记录|并肩/);
+  assert.match(page, /健康与运动/);
   assert.match(page, /WeightChart/);
   assert.match(page, /ExpensePage/);
-  assert.match(layout, /并肩/);
+  assert.match(layout, /健康与运动/);
   assert.match(css, /--coral/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.match(hosting, /"d1": "DB"/);

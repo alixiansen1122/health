@@ -10,7 +10,6 @@ import {
   deleteTrainingEntry,
   deleteTrainingPlan,
   deleteWeight,
-  deleteWorkout,
   inviteMember,
   joinGroup,
   saveExpense,
@@ -19,18 +18,16 @@ import {
   saveTrainingEntry,
   saveTrainingPlan,
   saveWeight,
-  saveWorkout,
   toggleTrainingEntry,
   toggleTrainingPlan,
-  toggleWorkout,
 } from "./actions";
 import { ExpenseBars, WeightChart } from "./charts";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "并肩 · 双人健康记录",
-  description: "和重要的人一起记录体重、安排运动、看清健身消费。",
+  title: "健康与运动",
+  description: "个人饮食、运动计划与每日健康记录。",
 };
 
 type Profile = {
@@ -44,10 +41,6 @@ type Profile = {
 type Group = { id: string; name: string; owner_id: string; invite_code: string; role: string };
 type Member = Profile & { role: string };
 type Weight = { id: string; record_date: string; weight_kg: number; note: string };
-type Workout = {
-  id: string; group_id: string; user_id: string; workout_date: string; activity: string;
-  duration_minutes: number | null; completed: number; notes: string; display_name: string;
-};
 type Expense = {
   id: string; group_id: string; user_id: string; purchase_date: string; item: string;
   amount_cents: number; category: string; notes: string; display_name: string;
@@ -70,15 +63,16 @@ const navItems = [
   ["home", "⌂", "首页"],
   ["weight", "↗", "体重"],
   ["workouts", "◫", "运动"],
-  ["health", "✦", "记录"],
+  ["health", "✦", "饮食"],
   ["expenses", "¥", "消费"],
   ["group", "◎", "群组"],
 ] as const;
 
-function queryLink(view: string, groupId?: string) {
+function queryLink(view: string, groupId?: string, date?: string) {
   const params = new URLSearchParams();
   if (view !== "home") params.set("view", view);
   if (groupId) params.set("group", groupId);
+  if (date && (view === "workouts" || view === "health")) params.set("date", date);
   const query = params.toString();
   return query ? `/?${query}` : "/";
 }
@@ -92,19 +86,45 @@ function dateLabel(value: string) {
   return `${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
-function mondayOf(date: Date) {
-  const result = new Date(date);
-  const day = result.getDay() || 7;
-  result.setDate(result.getDate() - day + 1);
-  return result.toISOString().slice(0, 10);
+function chinaToday() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
 
-export default async function Home({ searchParams }: { searchParams: Promise<{ view?: string; group?: string }> }) {
+function addDays(value: string, amount: number) {
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + amount);
+  return date.toISOString().slice(0, 10);
+}
+
+function mondayOfValue(value: string) {
+  const date = new Date(`${value}T12:00:00Z`);
+  const day = date.getUTCDay() || 7;
+  return addDays(value, 1 - day);
+}
+
+function safeDate(value: string | undefined, fallback: string) {
+  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T12:00:00Z`)) ? value : fallback;
+}
+
+function weekDates(weekStart: string) {
+  return Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
+}
+
+export default async function Home({ searchParams }: { searchParams: Promise<{ view?: string; group?: string; date?: string }> }) {
   const user = await requireAppUser("/");
   await ensureDatabase();
   const db = getD1();
   const params = await searchParams;
   const view = navItems.some(([key]) => key === params.view) ? params.view! : "home";
+  const todayValue = chinaToday();
+  const anchorDate = safeDate(params.date, todayValue);
+  const weekStart = mondayOfValue(anchorDate);
+  const weekEnd = addDays(weekStart, 6);
 
   const profile = await db.prepare("SELECT * FROM profiles WHERE user_id = ?").bind(user.userId).first<Profile>();
   if (!profile) return <Onboarding email={user.email} suggestedName={user.fullName ?? ""} />;
@@ -125,25 +145,21 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
     FROM weight_entries WHERE user_id = ? ORDER BY record_date ASC`).bind(user.userId).all<Weight>());
 
   const [meals, trainingEntries, trainingPlans] = await Promise.all([
-    db.prepare(`SELECT * FROM meal_entries WHERE user_id = ?
-      ORDER BY record_date DESC, created_at DESC LIMIT 120`).bind(user.userId).all<Meal>().then(resultRows),
-    db.prepare(`SELECT * FROM training_entries WHERE user_id = ?
-      ORDER BY record_date DESC, created_at DESC LIMIT 120`).bind(user.userId).all<TrainingEntry>().then(resultRows),
+    db.prepare(`SELECT * FROM meal_entries WHERE user_id = ? AND record_date BETWEEN ? AND ?
+      ORDER BY record_date ASC, created_at ASC`).bind(user.userId, weekStart, weekEnd).all<Meal>().then(resultRows),
+    db.prepare(`SELECT * FROM training_entries WHERE user_id = ? AND record_date BETWEEN ? AND ?
+      ORDER BY record_date ASC, created_at ASC`).bind(user.userId, weekStart, weekEnd).all<TrainingEntry>().then(resultRows),
     db.prepare(`SELECT * FROM training_plans WHERE user_id = ?
       ORDER BY active DESC, start_date DESC, created_at DESC LIMIT 30`).bind(user.userId).all<TrainingPlan>().then(resultRows),
   ]);
 
   let members: Member[] = [];
-  let workouts: Workout[] = [];
   let expenses: Expense[] = [];
   if (selectedGroup) {
-    [members, workouts, expenses] = await Promise.all([
+    [members, expenses] = await Promise.all([
       db.prepare(`SELECT p.*, gm.role FROM group_members gm JOIN profiles p ON p.user_id = gm.user_id
         WHERE gm.group_id = ? ORDER BY CASE gm.role WHEN 'owner' THEN 0 ELSE 1 END, p.display_name`)
         .bind(selectedGroup.id).all<Member>().then(resultRows),
-      db.prepare(`SELECT w.*, p.display_name FROM workouts w JOIN profiles p ON p.user_id = w.user_id
-        WHERE w.group_id = ? ORDER BY w.workout_date DESC, w.created_at DESC LIMIT 120`)
-        .bind(selectedGroup.id).all<Workout>().then(resultRows),
       db.prepare(`SELECT e.*, p.display_name FROM expenses e JOIN profiles p ON p.user_id = e.user_id
         WHERE e.group_id = ? ORDER BY e.purchase_date DESC, e.updated_at DESC LIMIT 200`)
         .bind(selectedGroup.id).all<Expense>().then(resultRows),
@@ -153,19 +169,16 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
   const currentWeight = weights.at(-1)?.weight_kg ?? profile.current_weight_kg;
   const startWeight = weights[0]?.weight_kg ?? currentWeight;
   const weightChange = currentWeight - startWeight;
-  const nowDate = new Date();
-  const todayValue = nowDate.toISOString().slice(0, 10);
   const monthStart = todayValue.slice(0, 8) + "01";
-  const weekStart = mondayOf(nowDate);
   const todayExpenses = expenses.filter((item) => item.purchase_date === todayValue).reduce((sum, item) => sum + item.amount_cents, 0);
   const weekExpenses = expenses.filter((item) => item.purchase_date >= weekStart).reduce((sum, item) => sum + item.amount_cents, 0);
   const monthExpenses = expenses.filter((item) => item.purchase_date >= monthStart).reduce((sum, item) => sum + item.amount_cents, 0);
-  const upcoming = workouts.filter((item) => item.workout_date >= todayValue).sort((a, b) => a.workout_date.localeCompare(b.workout_date));
+  const upcoming = trainingEntries.filter((item) => item.record_date >= todayValue).sort((a, b) => a.record_date.localeCompare(b.record_date));
 
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <Link className="brand" href="/"><span className="brand-mark">并</span><span>并肩<small>BETTER TOGETHER</small></span></Link>
+        <Link className="brand" href="/"><span className="brand-mark">健</span><span>健康与运动<small>HEALTH &amp; FITNESS</small></span></Link>
         <nav className="side-nav" aria-label="主导航">
           {navItems.map(([key, icon, label]) => (
             <Link key={key} className={view === key ? "active" : ""} href={queryLink(key, selectedGroup?.id)}>
@@ -182,19 +195,19 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
       <main className="main-content">
         <header className="topbar">
           <div>
-            <p className="eyebrow">{selectedGroup ? selectedGroup.name : "你的健康空间"}</p>
+            <p className="eyebrow">{view === "workouts" || view === "health" ? "个人健康空间" : selectedGroup ? selectedGroup.name : "你的健康空间"}</p>
             <h1>{view === "home" ? `晚上好，${profile.display_name}` : navItems.find(([key]) => key === view)?.[2]}</h1>
           </div>
           <div className="top-actions">
-            {groups.length > 1 && <details className="group-switch"><summary>{selectedGroup?.name}⌄</summary><div>{groups.map((group) => <Link key={group.id} href={queryLink(view, group.id)}>{group.name}</Link>)}</div></details>}
+            {groups.length > 1 && view !== "workouts" && view !== "health" && <details className="group-switch"><summary>{selectedGroup?.name}⌄</summary><div>{groups.map((group) => <Link key={group.id} href={queryLink(view, group.id)}>{group.name}</Link>)}</div></details>}
             <a className="ghost-button" href={chatGPTSignOutPath("/")}>退出</a>
           </div>
         </header>
 
-        {view === "home" && <Dashboard profile={profile} currentWeight={currentWeight} weightChange={weightChange} weights={weights} selectedGroup={selectedGroup} upcoming={upcoming} monthExpenses={monthExpenses} members={members} today={todayValue} />}
+        {view === "home" && <Dashboard profile={profile} currentWeight={currentWeight} weightChange={weightChange} weights={weights} upcoming={upcoming} monthExpenses={monthExpenses} members={members} />}
         {view === "weight" && <WeightPage profile={profile} weights={weights} currentWeight={currentWeight} weightChange={weightChange} />}
-        {view === "workouts" && <WorkoutPage selectedGroup={selectedGroup} workouts={workouts} members={members} today={todayValue} />}
-        {view === "health" && <HealthSyncPage meals={meals} trainingEntries={trainingEntries} trainingPlans={trainingPlans} today={todayValue} />}
+        {view === "workouts" && <PersonalWorkoutPage trainingEntries={trainingEntries} trainingPlans={trainingPlans} today={todayValue} anchorDate={anchorDate} weekStart={weekStart} selectedGroupId={selectedGroup?.id} />}
+        {view === "health" && <MealPage meals={meals} profile={profile} currentWeight={currentWeight} today={todayValue} anchorDate={anchorDate} weekStart={weekStart} selectedGroupId={selectedGroup?.id} />}
         {view === "expenses" && <ExpensePage selectedGroup={selectedGroup} expenses={expenses} members={members} today={todayValue} todayTotal={todayExpenses} weekTotal={weekExpenses} monthTotal={monthExpenses} />}
         {view === "group" && <GroupPage selectedGroup={selectedGroup} groups={groups} members={members} profile={profile} />}
       </main>
@@ -209,11 +222,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
 function Onboarding({ email, suggestedName }: { email: string; suggestedName: string }) {
   return <main className="onboarding">
     <section className="welcome-panel">
-      <div className="brand-mark large">并</div>
-      <p className="eyebrow">WELCOME TO 并肩</p>
-      <h1>两个人，也能把坚持变得更简单。</h1>
-      <p>记录真实变化，共享运动计划，看清每一笔健身投入。你的身体数据由你决定是否分享。</p>
-      <div className="welcome-points"><span>✓ 每日体重趋势</span><span>✓ 双人运动日历</span><span>✓ 消费清晰统计</span></div>
+      <div className="brand-mark large">健</div>
+      <p className="eyebrow">WELCOME TO 健康与运动</p>
+      <h1>把每一天的健康变化，认真记录下来。</h1>
+      <p>集中管理体重、个人运动计划与每日饮食，也可以按需与朋友共享消费记录。</p>
+      <div className="welcome-points"><span>✓ 每日体重趋势</span><span>✓ 个人运动周历</span><span>✓ 饮食与热量建议</span></div>
     </section>
     <form action={saveProfile} className="onboarding-form">
       <p className="step-label">第 1 步，共 1 步</p><h2>先认识一下你</h2><p className="muted">账号邮箱：{email}</p>
@@ -229,17 +242,17 @@ function EmptyGroup() {
   return <section className="empty-state card"><span className="empty-icon">◎</span><h2>先创建你们的双人群组</h2><p>创建后即可共享运动日历和消费记录。</p><div className="empty-actions"><details><summary className="primary-button">创建群组</summary><form action={createGroup}><label>群组名称<input name="name" placeholder="例如：周末训练搭子" required /></label><button className="primary-button">确认创建</button></form></details><details><summary className="secondary-button">使用邀请码加入</summary><form action={joinGroup}><label>邀请码<input name="inviteCode" placeholder="输入 10 位邀请码" required /></label><button className="primary-button">加入群组</button></form></details></div></section>;
 }
 
-function Dashboard({ profile, currentWeight, weightChange, weights, selectedGroup, upcoming, monthExpenses, members, today }: { profile: Profile; currentWeight: number; weightChange: number; weights: Weight[]; selectedGroup: Group | null; upcoming: Workout[]; monthExpenses: number; members: Member[]; today: string }) {
+function Dashboard({ profile, currentWeight, weightChange, weights, upcoming, monthExpenses, members }: { profile: Profile; currentWeight: number; weightChange: number; weights: Weight[]; upcoming: TrainingEntry[]; monthExpenses: number; members: Member[] }) {
   return <>
     <section className="stat-grid">
       <article className="stat-card coral"><span className="stat-icon">↗</span><p>当前体重</p><strong>{currentWeight.toFixed(1)}<small> kg</small></strong><em className={weightChange <= 0 ? "good" : ""}>{weightChange > 0 ? "+" : ""}{weightChange.toFixed(1)} kg 自开始</em></article>
-      <article className="stat-card mint"><span className="stat-icon">✓</span><p>本月已完成</p><strong>{upcoming.filter((item) => item.completed).length}<small> 项</small></strong><em>{upcoming.length} 个运动安排</em></article>
+      <article className="stat-card mint"><span className="stat-icon">✓</span><p>本周个人训练</p><strong>{upcoming.filter((item) => item.completed).length}<small> 项完成</small></strong><em>{upcoming.length} 个训练安排</em></article>
       <article className="stat-card yellow"><span className="stat-icon">¥</span><p>本月消费</p><strong>{formatMoney(monthExpenses)}</strong><em>{members.length || 1} 人共同记录</em></article>
     </section>
     <section className="dashboard-grid">
       <article className="card chart-card"><div className="card-head"><div><p className="eyebrow">WEIGHT TREND</p><h2>体重趋势</h2></div><Link href="/?view=weight">查看全部 →</Link></div><WeightChart entries={weights.slice(-30)} /></article>
-      <article className="card plan-card"><div className="card-head"><div><p className="eyebrow">NEXT UP</p><h2>接下来的运动</h2></div>{selectedGroup && <details><summary className="mini-add">＋</summary><WorkoutForm groupId={selectedGroup.id} members={members} today={today} /></details>}</div>
-        {!selectedGroup ? <p className="muted">创建群组后一起安排运动。</p> : upcoming.length ? <div className="compact-list">{upcoming.slice(0, 4).map((item) => <div key={item.id}><time>{dateLabel(item.workout_date)}</time><span className={item.completed ? "done-dot" : "pending-dot"}></span><div><strong>{item.activity}</strong><small>{item.display_name}{item.duration_minutes ? ` · ${item.duration_minutes} 分钟` : ""}</small></div></div>)}</div> : <p className="muted">还没有运动安排，添加第一项吧。</p>}
+      <article className="card plan-card"><div className="card-head"><div><p className="eyebrow">NEXT UP</p><h2>接下来的个人训练</h2></div><Link href="/?view=workouts">查看周计划 →</Link></div>
+        {upcoming.length ? <div className="compact-list">{upcoming.slice(0, 4).map((item) => <div key={item.id}><time>{dateLabel(item.record_date)}</time><span className={item.completed ? "done-dot" : "pending-dot"}></span><div><strong>{item.activity}</strong><small>{item.duration_minutes ? `${item.duration_minutes} 分钟` : "未填写时长"}{item.source === "chatgpt" ? " · ChatGPT" : ""}</small></div></div>)}</div> : <p className="muted">本周还没有个人训练安排。</p>}
       </article>
     </section>
     <section className="quote-strip"><span>“</span><p>比昨天更强一点，就已经很好。</p><small>今天也一起完成一件小事吧，{profile.display_name}。</small></section>
@@ -259,7 +272,7 @@ function WeightPage({ profile, weights, currentWeight, weightChange }: { profile
 }
 
 function WeightForm() {
-  return <form action={saveWeight} className="popover-form"><h3>记录体重</h3><label>日期<input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label><label>体重（kg）<input name="weightKg" type="number" min="20" max="400" step="0.1" required /></label><label>备注（选填）<input name="note" maxLength={120} placeholder="例如：晨起空腹" /></label><button className="primary-button">保存记录</button></form>;
+  return <form action={saveWeight} className="popover-form"><h3>记录体重</h3><label>日期<input name="date" type="date" defaultValue={chinaToday()} required /></label><label>体重（kg）<input name="weightKg" type="number" min="20" max="400" step="0.1" required /></label><label>备注（选填）<input name="note" maxLength={120} placeholder="例如：晨起空腹" /></label><button className="primary-button">保存记录</button></form>;
 }
 
 const mealLabels = {
@@ -269,58 +282,139 @@ const mealLabels = {
   snack: "加餐",
 };
 
-function HealthSyncPage({ meals, trainingEntries, trainingPlans, today }: { meals: Meal[]; trainingEntries: TrainingEntry[]; trainingPlans: TrainingPlan[]; today: string }) {
-  const todayMeals = meals.filter((item) => item.record_date === today);
-  const todayTraining = trainingEntries.filter((item) => item.record_date === today);
-  const todayCalories = todayMeals.reduce((sum, item) => sum + (item.calories ?? 0), 0);
-  const todayMinutes = todayTraining.reduce((sum, item) => sum + (item.duration_minutes ?? 0), 0);
+const weekDayLabels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+const primaryMealTypes: Meal["meal_type"][] = ["breakfast", "lunch", "dinner"];
+
+function WeekNavigator({ view, weekStart, anchorDate, today, groupId }: { view: "workouts" | "health"; weekStart: string; anchorDate: string; today: string; groupId?: string }) {
+  const weekEnd = addDays(weekStart, 6);
+  return <div className="week-toolbar">
+    <div className="week-switcher">
+      <Link aria-label="上一周" href={queryLink(view, groupId, addDays(weekStart, -7))}>←</Link>
+      <strong>{dateLabel(weekStart)} — {dateLabel(weekEnd)}</strong>
+      <Link aria-label="下一周" href={queryLink(view, groupId, addDays(weekStart, 7))}>→</Link>
+      <Link className="today-link" href={queryLink(view, groupId, today)}>本周</Link>
+    </div>
+    <form method="get" className="date-jump">
+      <input type="hidden" name="view" value={view} />
+      {groupId && <input type="hidden" name="group" value={groupId} />}
+      <label>跳转日期<input name="date" type="date" defaultValue={anchorDate} /></label>
+      <button className="secondary-button">查询</button>
+    </form>
+  </div>;
+}
+
+function PersonalWorkoutPage({ trainingEntries, trainingPlans, today, anchorDate, weekStart, selectedGroupId }: { trainingEntries: TrainingEntry[]; trainingPlans: TrainingPlan[]; today: string; anchorDate: string; weekStart: string; selectedGroupId?: string }) {
+  const dates = weekDates(weekStart);
+  const completedCount = trainingEntries.filter((item) => item.completed).length;
+  const totalMinutes = trainingEntries.reduce((sum, item) => sum + (item.duration_minutes ?? 0), 0);
   const activePlans = trainingPlans.filter((item) => item.active);
 
   return <>
-    <section className="sync-hero">
-      <div><p className="eyebrow">CHATGPT SYNC</p><h2>一句话记录，网站立即同步</h2><p>在 ChatGPT 中调用“并肩健康”工具，饮食、训练和计划会写入这里；网页添加的记录也会被 ChatGPT 读取。</p></div>
-      <span>✦</span>
+    <section className="sync-hero workout-hero">
+      <div><p className="eyebrow">PERSONAL TRAINING</p><h2>你的专属运动空间</h2><p>手机 ChatGPT 记录的训练与总计划会同步到这里，仅按当前登录账号展示。</p></div>
+      <span>◫</span>
     </section>
     <section className="stat-grid health-stats">
-      <article className="stat-card yellow"><p>今日饮食</p><strong>{todayMeals.length}<small> 餐</small></strong><em>{todayCalories ? `${todayCalories} kcal` : "可选填热量"}</em></article>
-      <article className="stat-card mint"><p>今日训练</p><strong>{todayTraining.length}<small> 项</small></strong><em>{todayMinutes ? `${todayMinutes} 分钟` : "还没有时长"}</em></article>
-      <article className="stat-card coral"><p>执行中计划</p><strong>{activePlans.length}<small> 个</small></strong><em>个人记录仅你可见</em></article>
+      <article className="stat-card mint"><p>本周训练</p><strong>{trainingEntries.length}<small> 项</small></strong><em>{completedCount} 项已完成</em></article>
+      <article className="stat-card yellow"><p>累计时长</p><strong>{totalMinutes}<small> 分钟</small></strong><em>当前查询周</em></article>
+      <article className="stat-card coral"><p>执行中总计划</p><strong>{activePlans.length}<small> 个</small></strong><em>个人专属，不与群组混合</em></article>
     </section>
-    <section className="page-grid health-layout">
-      <div className="main-column">
-        <article className="card">
-          <div className="card-head"><div><p className="eyebrow">NUTRITION</p><h2>饮食记录</h2></div><details><summary className="primary-button small">＋ 添加饮食</summary><MealForm today={today} /></details></div>
-          <div className="health-list">{meals.map((item) => <div className="health-list-row" key={item.id}>
-            <span className="meal-badge">{mealLabels[item.meal_type]}</span>
-            <div><strong>{item.food}</strong><small>{dateLabel(item.record_date)}{item.notes ? ` · ${item.notes}` : ""}</small><div className="macro-line">{item.calories !== null && <span>{item.calories} kcal</span>}{item.protein_grams !== null && <span>蛋白质 {item.protein_grams}g</span>}{item.carbs_grams !== null && <span>碳水 {item.carbs_grams}g</span>}{item.fat_grams !== null && <span>脂肪 {item.fat_grams}g</span>}</div></div>
-            {item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}
-            <form action={deleteMeal}><input type="hidden" name="id" value={item.id} /><button className="icon-button" aria-label={`删除 ${item.food}`}>×</button></form>
-          </div>)}{!meals.length && <p className="muted list-empty">还没有饮食记录。可以从网页添加，也可以让 ChatGPT 帮你记。</p>}</div>
-        </article>
-        <article className="card">
-          <div className="card-head"><div><p className="eyebrow">PERSONAL TRAINING</p><h2>每日训练</h2></div><details><summary className="primary-button small">＋ 添加训练</summary><TrainingEntryForm today={today} /></details></div>
-          <div className="health-list">{trainingEntries.map((item) => <div className={`health-list-row training-record ${item.completed ? "completed" : ""}`} key={item.id}>
-            <form action={toggleTrainingEntry}><input type="hidden" name="id" value={item.id} /><button className="check-button" aria-label="切换训练完成状态">{item.completed ? "✓" : ""}</button></form>
-            <div><strong>{item.activity}</strong><small>{dateLabel(item.record_date)}{item.duration_minutes ? ` · ${item.duration_minutes} 分钟` : ""}{item.notes ? ` · ${item.notes}` : ""}</small></div>
-            {item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}
-            <form action={deleteTrainingEntry}><input type="hidden" name="id" value={item.id} /><button className="icon-button" aria-label={`删除 ${item.activity}`}>×</button></form>
-          </div>)}{!trainingEntries.length && <p className="muted list-empty">还没有个人训练记录。</p>}</div>
-        </article>
+    <WeekNavigator view="workouts" weekStart={weekStart} anchorDate={anchorDate} today={today} groupId={selectedGroupId} />
+    <section className="page-grid weekly-layout">
+      <div className="main-column weekly-days">
+        {dates.map((date, index) => {
+          const items = trainingEntries.filter((item) => item.record_date === date);
+          return <article className={`card week-day-card ${date === anchorDate ? "focus-day" : ""}`} key={date} id={`workout-${date}`}>
+            <header className="week-day-head">
+              <div><span>{weekDayLabels[index]}</span><strong>{dateLabel(date)}</strong>{date === today && <em>今天</em>}</div>
+              <div><small>{items.filter((item) => item.completed).length}/{items.length} 完成</small><details><summary className="mini-add">＋</summary><TrainingEntryForm today={date} /></details></div>
+            </header>
+            <div className="health-list">{items.map((item) => <div className={`health-list-row training-record ${item.completed ? "completed" : ""}`} key={item.id}>
+              <form action={toggleTrainingEntry}><input type="hidden" name="id" value={item.id} /><button className="check-button" aria-label="切换训练完成状态">{item.completed ? "✓" : ""}</button></form>
+              <div><strong>{item.activity}</strong><small>{item.duration_minutes ? `${item.duration_minutes} 分钟` : "未填写时长"}{item.notes ? ` · ${item.notes}` : ""}</small></div>
+              {item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}
+              <form action={deleteTrainingEntry}><input type="hidden" name="id" value={item.id} /><button className="icon-button" aria-label={`删除 ${item.activity}`}>×</button></form>
+            </div>)}{!items.length && <p className="muted day-empty">暂无训练，点击右上角添加</p>}</div>
+          </article>;
+        })}
       </div>
-      <aside className="side-column">
+      <aside className="side-column sticky-column">
         <article className="card">
-          <div className="card-head"><div><p className="eyebrow">TRAINING PLANS</p><h2>训练计划</h2></div><details><summary className="mini-add">＋</summary><TrainingPlanForm today={today} /></details></div>
+          <div className="card-head"><div><p className="eyebrow">MASTER PLAN</p><h2>总运动计划</h2></div><details><summary className="mini-add">＋</summary><TrainingPlanForm today={today} /></details></div>
           <div className="plan-list">{trainingPlans.map((plan) => <article className={plan.active ? "active" : ""} key={plan.id}>
             <header><strong>{plan.title}</strong>{plan.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}</header>
             <small>{plan.start_date}{plan.end_date ? ` → ${plan.end_date}` : " 起"}</small>
             <p>{plan.content}</p>
             <div><form action={toggleTrainingPlan}><input type="hidden" name="id" value={plan.id} /><button className="text-button">{plan.active ? "标记完成" : "重新启用"}</button></form><form action={deleteTrainingPlan}><input type="hidden" name="id" value={plan.id} /><button className="text-button danger">删除</button></form></div>
-          </article>)}{!trainingPlans.length && <p className="muted list-empty">还没有训练计划。</p>}</div>
+          </article>)}{!trainingPlans.length && <p className="muted list-empty">还没有总计划，可在这里添加或让 ChatGPT 保存。</p>}</div>
         </article>
-        <article className="privacy-note"><strong>同步说明</strong><p>普通 ChatGPT 对话不会被网站读取。只有你明确调用“并肩健康”工具时，相关字段才会写入本站。</p></article>
+        <article className="privacy-note"><strong>手机同步</strong><p>对 ChatGPT 说“记录今天训练……”会进入对应日期；“保存训练计划……”会进入上方总计划。</p></article>
       </aside>
     </section>
   </>;
+}
+
+function MealPage({ meals, profile, currentWeight, today, anchorDate, weekStart, selectedGroupId }: { meals: Meal[]; profile: Profile; currentWeight: number; today: string; anchorDate: string; weekStart: string; selectedGroupId?: string }) {
+  const dates = weekDates(weekStart);
+  const bmi = currentWeight / Math.pow(profile.height_cm / 100, 2);
+  const calorieFactor = bmi >= 25 ? 28 : bmi < 18.5 ? 33 : 30;
+  const calorieTarget = Math.round(currentWeight * calorieFactor / 50) * 50;
+  const proteinTarget = Math.round(currentWeight * 1.6);
+  const fatTarget = Math.round(currentWeight * 0.8);
+  const carbTarget = Math.max(0, Math.round((calorieTarget - proteinTarget * 4 - fatTarget * 9) / 4));
+  const weekCalories = meals.reduce((sum, item) => sum + (item.calories ?? 0), 0);
+  const recordedDays = new Set(meals.map((item) => item.record_date)).size;
+
+  return <>
+    <section className="sync-hero meal-hero">
+      <div><p className="eyebrow">NUTRITION WEEK</p><h2>一周饮食，一眼看清</h2><p>早餐、午餐、晚餐与加餐按天归档；手机 ChatGPT 新增的餐食会自动出现在对应日期。</p></div>
+      <span>✦</span>
+    </section>
+    <section className="stat-grid health-stats">
+      <article className="stat-card yellow"><p>每日建议热量</p><strong>{calorieTarget}<small> kcal</small></strong><em>按当前身高与体重估算</em></article>
+      <article className="stat-card mint"><p>本周已记录</p><strong>{recordedDays}<small>/7 天</small></strong><em>{meals.length} 条餐食</em></article>
+      <article className="stat-card coral"><p>本周已录入热量</p><strong>{weekCalories}<small> kcal</small></strong><em>仅统计已填写热量的餐食</em></article>
+    </section>
+    <WeekNavigator view="health" weekStart={weekStart} anchorDate={anchorDate} today={today} groupId={selectedGroupId} />
+    <section className="page-grid weekly-layout">
+      <div className="main-column weekly-days">
+        {dates.map((date, index) => {
+          const items = meals.filter((item) => item.record_date === date);
+          const dayCalories = items.reduce((sum, item) => sum + (item.calories ?? 0), 0);
+          const snacks = items.filter((item) => item.meal_type === "snack");
+          return <article className={`card meal-day-card ${date === anchorDate ? "focus-day" : ""}`} key={date} id={`meal-${date}`}>
+            <header className="week-day-head">
+              <div><span>{weekDayLabels[index]}</span><strong>{dateLabel(date)}</strong>{date === today && <em>今天</em>}</div>
+              <div className="day-calories"><small>{dayCalories || 0} / {calorieTarget} kcal</small><details><summary className="mini-add">＋</summary><MealForm today={date} /></details></div>
+            </header>
+            <div className="calorie-track" aria-label={`${date} 热量进度`}><i style={{ width: `${Math.min(100, calorieTarget ? dayCalories / calorieTarget * 100 : 0)}%` }} /></div>
+            <div className="meal-slots">{primaryMealTypes.map((mealType) => {
+              const slotItems = items.filter((item) => item.meal_type === mealType);
+              return <section className="meal-slot" key={mealType}><h3>{mealLabels[mealType]}</h3>{slotItems.map((item) => <MealRecord key={item.id} item={item} />)}{!slotItems.length && <p>尚未记录</p>}</section>;
+            })}</div>
+            {snacks.length > 0 && <div className="snack-row"><strong>加餐</strong><div>{snacks.map((item) => <MealRecord key={item.id} item={item} compact />)}</div></div>}
+          </article>;
+        })}
+      </div>
+      <aside className="side-column sticky-column">
+        <article className="card nutrition-advice">
+          <p className="eyebrow">DAILY GUIDANCE</p><h2>每日摄入建议</h2>
+          <div className="calorie-target"><strong>{calorieTarget}</strong><span>kcal / 天</span></div>
+          <div className="target-grid"><div><b>{proteinTarget}g</b><span>蛋白质</span></div><div><b>{carbTarget}g</b><span>碳水</span></div><div><b>{fatTarget}g</b><span>脂肪</span></div></div>
+          <dl><div><dt>当前体重</dt><dd>{currentWeight.toFixed(1)} kg</dd></div><div><dt>身高</dt><dd>{profile.height_cm} cm</dd></div><div><dt>BMI</dt><dd>{bmi.toFixed(1)}</dd></div></dl>
+          <p className="advice-note">按体重与 BMI 做日常训练饮食估算。实际需要会随年龄、性别、训练量和目标变化，仅作一般记录参考，不替代医疗或营养建议。</p>
+        </article>
+        <article className="privacy-note"><strong>手机同步</strong><p>对 ChatGPT 说“记录今天早餐……”或注明具体日期，餐食会同步到本页对应星期和餐次。</p></article>
+      </aside>
+    </section>
+  </>;
+}
+
+function MealRecord({ item, compact = false }: { item: Meal; compact?: boolean }) {
+  return <div className={`meal-record ${compact ? "compact" : ""}`}>
+    <div><strong>{item.food}</strong><small>{item.calories !== null ? `${item.calories} kcal` : "未填热量"}{item.notes ? ` · ${item.notes}` : ""}</small><div className="macro-line">{item.protein_grams !== null && <span>蛋白质 {item.protein_grams}g</span>}{item.carbs_grams !== null && <span>碳水 {item.carbs_grams}g</span>}{item.fat_grams !== null && <span>脂肪 {item.fat_grams}g</span>}</div></div>
+    <div>{item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}<form action={deleteMeal}><input type="hidden" name="id" value={item.id} /><button className="icon-button" aria-label={`删除 ${item.food}`}>×</button></form></div>
+  </div>;
 }
 
 function MealForm({ today }: { today: string }) {
@@ -333,23 +427,6 @@ function TrainingEntryForm({ today }: { today: string }) {
 
 function TrainingPlanForm({ today }: { today: string }) {
   return <form action={saveTrainingPlan} className="popover-form"><h3>新建训练计划</h3><label>计划名称<input name="title" maxLength={100} placeholder="例如：四周增肌计划" required /></label><div className="form-grid"><label>开始日期<input name="startDate" type="date" defaultValue={today} required /></label><label>结束日期<input name="endDate" type="date" /></label></div><label>计划内容<textarea name="content" maxLength={3000} placeholder="例如：周一胸肩，周三腿，周五背臂；每次训练后低强度有氧 20 分钟。" required /></label><button className="primary-button">保存计划</button></form>;
-}
-
-function WorkoutPage({ selectedGroup, workouts, members, today }: { selectedGroup: Group | null; workouts: Workout[]; members: Member[]; today: string }) {
-  if (!selectedGroup) return <EmptyGroup />;
-  const grouped = [...workouts]
-    .sort((a, b) => b.workout_date.localeCompare(a.workout_date))
-    .reduce((map, item) => {
-      const list = map.get(item.workout_date) ?? [];
-      list.push(item);
-      map.set(item.workout_date, list);
-      return map;
-    }, new Map<string, Workout[]>());
-  return <section><div className="section-toolbar"><div><p className="muted">自由填写项目，成员都可以共同维护</p></div><details><summary className="primary-button">＋ 添加运动</summary><WorkoutForm groupId={selectedGroup.id} members={members} today={today} /></details></div><div className="calendar-list">{Array.from(grouped).map(([date, items]) => <article className="card day-card" key={date}><header><time><strong>{new Date(`${date}T00:00:00`).getDate()}</strong><span>{dateLabel(date)}<small>{date === today ? "今天" : ""}</small></span></time><span>{items.filter((item) => item.completed).length}/{items.length} 完成</span></header><div>{items.map((item) => <div className={`workout-row ${item.completed ? "completed" : ""}`} key={item.id}><form action={toggleWorkout}><input type="hidden" name="id" value={item.id} /><input type="hidden" name="groupId" value={selectedGroup.id} /><button className="check-button" aria-label="切换完成状态">{item.completed ? "✓" : ""}</button></form><div><strong>{item.activity}</strong><small>{item.display_name}{item.duration_minutes ? ` · ${item.duration_minutes} 分钟` : ""}{item.notes ? ` · ${item.notes}` : ""}</small></div><details><summary className="icon-button">•••</summary><WorkoutForm groupId={selectedGroup.id} members={members} today={today} workout={item} /><form action={deleteWorkout} className="delete-form"><input type="hidden" name="id" value={item.id} /><input type="hidden" name="groupId" value={selectedGroup.id} /><button>删除这项运动</button></form></details></div>)}</div></article>)}{!workouts.length && <div className="card empty-state"><span className="empty-icon">◫</span><h2>还没有运动安排</h2><p>把你们想做的运动直接写进日历。</p></div>}</div></section>;
-}
-
-function WorkoutForm({ groupId, members, today, workout }: { groupId: string; members: Member[]; today: string; workout?: Workout }) {
-  return <form action={saveWorkout} className="popover-form"><h3>{workout ? "编辑运动" : "添加运动"}</h3><input type="hidden" name="groupId" value={groupId} />{workout && <input type="hidden" name="id" value={workout.id} />}<label>日期<input name="date" type="date" defaultValue={workout?.workout_date ?? today} required /></label><label>运动项目<input name="activity" defaultValue={workout?.activity} placeholder="例如：慢跑 5 公里" required maxLength={80} /></label><div className="form-grid"><label>执行人<select name="assigneeId" defaultValue={workout?.user_id}>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name}</option>)}</select></label><label>时长（分钟）<input name="durationMinutes" type="number" min="1" max="1440" defaultValue={workout?.duration_minutes ?? ""} /></label></div><label>备注<input name="notes" defaultValue={workout?.notes} maxLength={200} /></label><label className="inline-check"><input name="completed" type="checkbox" defaultChecked={Boolean(workout?.completed)} /> 已完成</label><button className="primary-button">保存</button></form>;
 }
 
 function ExpensePage({ selectedGroup, expenses, members, today, todayTotal, weekTotal, monthTotal }: { selectedGroup: Group | null; expenses: Expense[]; members: Member[]; today: string; todayTotal: number; weekTotal: number; monthTotal: number }) {

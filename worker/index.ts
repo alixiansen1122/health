@@ -36,7 +36,7 @@ const tools = [
   {
     name: "record_meal",
     title: "记录饮食",
-    description: "把用户明确提供的一餐饮食写入并肩健康网站。日期和餐次不明确时先询问用户。",
+    description: "把用户明确提供的一餐饮食写入健康与运动网站的个人饮食页。日期和餐次不明确时先询问用户。",
     inputSchema: {
       type: "object",
       properties: {
@@ -57,7 +57,7 @@ const tools = [
   {
     name: "record_training",
     title: "记录每日训练",
-    description: "记录用户个人当天的训练内容，可保存计划中或已完成的训练。",
+    description: "把用户个人当天的训练内容写入健康与运动网站的个人运动页，可记录计划中或已完成的训练。",
     inputSchema: {
       type: "object",
       properties: {
@@ -75,7 +75,7 @@ const tools = [
   {
     name: "save_training_plan",
     title: "保存训练计划",
-    description: "把用户确认过的阶段训练计划保存到并肩健康网站。",
+    description: "把用户确认过的阶段训练计划保存到健康与运动网站的总运动计划。",
     inputSchema: {
       type: "object",
       properties: {
@@ -166,7 +166,7 @@ async function handleMcpRequest(request: Request, env: Env): Promise<Response> {
     return rpcResult(id, {
       supportedVersions: ["2026-07-28"],
       capabilities: { tools: {} },
-      serverInfo: { name: "health-together", version: "1.0.0" },
+      serverInfo: { name: "health-and-fitness", version: "1.1.0" },
     });
   }
   if (body.method === "tools/list") return rpcResult(id, { tools });
