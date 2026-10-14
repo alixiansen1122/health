@@ -81,6 +81,70 @@ export const weightEntries = sqliteTable(
   ],
 );
 
+export const mealEntries = sqliteTable(
+  "meal_entries",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    recordDate: text("record_date").notNull(),
+    mealType: text("meal_type", {
+      enum: ["breakfast", "lunch", "dinner", "snack"],
+    }).notNull(),
+    food: text("food").notNull(),
+    calories: integer("calories"),
+    proteinGrams: real("protein_grams"),
+    carbsGrams: real("carbs_grams"),
+    fatGrams: real("fat_grams"),
+    notes: text("notes").notNull().default(""),
+    source: text("source", { enum: ["web", "chatgpt"] })
+      .notNull()
+      .default("web"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_meal_entries_user_date").on(table.userId, table.recordDate)],
+);
+
+export const trainingEntries = sqliteTable(
+  "training_entries",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    recordDate: text("record_date").notNull(),
+    activity: text("activity").notNull(),
+    durationMinutes: integer("duration_minutes"),
+    completed: integer("completed", { mode: "boolean" })
+      .notNull()
+      .default(true),
+    notes: text("notes").notNull().default(""),
+    source: text("source", { enum: ["web", "chatgpt"] })
+      .notNull()
+      .default("web"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_training_entries_user_date").on(table.userId, table.recordDate)],
+);
+
+export const trainingPlans = sqliteTable(
+  "training_plans",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    title: text("title").notNull(),
+    startDate: text("start_date").notNull(),
+    endDate: text("end_date"),
+    content: text("content").notNull(),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    source: text("source", { enum: ["web", "chatgpt"] })
+      .notNull()
+      .default("web"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_training_plans_user_active").on(table.userId, table.active)],
+);
+
 export const workouts = sqliteTable(
   "workouts",
   {

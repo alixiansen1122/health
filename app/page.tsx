@@ -5,15 +5,23 @@ import { chatGPTSignOutPath } from "./chatgpt-auth";
 import { ensureDatabase, getD1, resultRows } from "@/db/runtime";
 import {
   createGroup,
+  deleteMeal,
   deleteExpense,
+  deleteTrainingEntry,
+  deleteTrainingPlan,
   deleteWeight,
   deleteWorkout,
   inviteMember,
   joinGroup,
   saveExpense,
+  saveMeal,
   saveProfile,
+  saveTrainingEntry,
+  saveTrainingPlan,
   saveWeight,
   saveWorkout,
+  toggleTrainingEntry,
+  toggleTrainingPlan,
   toggleWorkout,
 } from "./actions";
 import { ExpenseBars, WeightChart } from "./charts";
@@ -44,11 +52,25 @@ type Expense = {
   id: string; group_id: string; user_id: string; purchase_date: string; item: string;
   amount_cents: number; category: string; notes: string; display_name: string;
 };
+type Meal = {
+  id: string; record_date: string; meal_type: "breakfast" | "lunch" | "dinner" | "snack";
+  food: string; calories: number | null; protein_grams: number | null; carbs_grams: number | null;
+  fat_grams: number | null; notes: string; source: "web" | "chatgpt";
+};
+type TrainingEntry = {
+  id: string; record_date: string; activity: string; duration_minutes: number | null;
+  completed: number; notes: string; source: "web" | "chatgpt";
+};
+type TrainingPlan = {
+  id: string; title: string; start_date: string; end_date: string | null;
+  content: string; active: number; source: "web" | "chatgpt";
+};
 
 const navItems = [
   ["home", "⌂", "首页"],
   ["weight", "↗", "体重"],
   ["workouts", "◫", "运动"],
+  ["health", "✦", "记录"],
   ["expenses", "¥", "消费"],
   ["group", "◎", "群组"],
 ] as const;
@@ -101,6 +123,15 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
 
   const weights = resultRows(await db.prepare(`SELECT id, record_date, weight_kg, note
     FROM weight_entries WHERE user_id = ? ORDER BY record_date ASC`).bind(user.userId).all<Weight>());
+
+  const [meals, trainingEntries, trainingPlans] = await Promise.all([
+    db.prepare(`SELECT * FROM meal_entries WHERE user_id = ?
+      ORDER BY record_date DESC, created_at DESC LIMIT 120`).bind(user.userId).all<Meal>().then(resultRows),
+    db.prepare(`SELECT * FROM training_entries WHERE user_id = ?
+      ORDER BY record_date DESC, created_at DESC LIMIT 120`).bind(user.userId).all<TrainingEntry>().then(resultRows),
+    db.prepare(`SELECT * FROM training_plans WHERE user_id = ?
+      ORDER BY active DESC, start_date DESC, created_at DESC LIMIT 30`).bind(user.userId).all<TrainingPlan>().then(resultRows),
+  ]);
 
   let members: Member[] = [];
   let workouts: Workout[] = [];
@@ -163,6 +194,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
         {view === "home" && <Dashboard profile={profile} currentWeight={currentWeight} weightChange={weightChange} weights={weights} selectedGroup={selectedGroup} upcoming={upcoming} monthExpenses={monthExpenses} members={members} today={todayValue} />}
         {view === "weight" && <WeightPage profile={profile} weights={weights} currentWeight={currentWeight} weightChange={weightChange} />}
         {view === "workouts" && <WorkoutPage selectedGroup={selectedGroup} workouts={workouts} members={members} today={todayValue} />}
+        {view === "health" && <HealthSyncPage meals={meals} trainingEntries={trainingEntries} trainingPlans={trainingPlans} today={todayValue} />}
         {view === "expenses" && <ExpensePage selectedGroup={selectedGroup} expenses={expenses} members={members} today={todayValue} todayTotal={todayExpenses} weekTotal={weekExpenses} monthTotal={monthExpenses} />}
         {view === "group" && <GroupPage selectedGroup={selectedGroup} groups={groups} members={members} profile={profile} />}
       </main>
@@ -228,6 +260,79 @@ function WeightPage({ profile, weights, currentWeight, weightChange }: { profile
 
 function WeightForm() {
   return <form action={saveWeight} className="popover-form"><h3>记录体重</h3><label>日期<input name="date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label><label>体重（kg）<input name="weightKg" type="number" min="20" max="400" step="0.1" required /></label><label>备注（选填）<input name="note" maxLength={120} placeholder="例如：晨起空腹" /></label><button className="primary-button">保存记录</button></form>;
+}
+
+const mealLabels = {
+  breakfast: "早餐",
+  lunch: "午餐",
+  dinner: "晚餐",
+  snack: "加餐",
+};
+
+function HealthSyncPage({ meals, trainingEntries, trainingPlans, today }: { meals: Meal[]; trainingEntries: TrainingEntry[]; trainingPlans: TrainingPlan[]; today: string }) {
+  const todayMeals = meals.filter((item) => item.record_date === today);
+  const todayTraining = trainingEntries.filter((item) => item.record_date === today);
+  const todayCalories = todayMeals.reduce((sum, item) => sum + (item.calories ?? 0), 0);
+  const todayMinutes = todayTraining.reduce((sum, item) => sum + (item.duration_minutes ?? 0), 0);
+  const activePlans = trainingPlans.filter((item) => item.active);
+
+  return <>
+    <section className="sync-hero">
+      <div><p className="eyebrow">CHATGPT SYNC</p><h2>一句话记录，网站立即同步</h2><p>在 ChatGPT 中调用“并肩健康”工具，饮食、训练和计划会写入这里；网页添加的记录也会被 ChatGPT 读取。</p></div>
+      <span>✦</span>
+    </section>
+    <section className="stat-grid health-stats">
+      <article className="stat-card yellow"><p>今日饮食</p><strong>{todayMeals.length}<small> 餐</small></strong><em>{todayCalories ? `${todayCalories} kcal` : "可选填热量"}</em></article>
+      <article className="stat-card mint"><p>今日训练</p><strong>{todayTraining.length}<small> 项</small></strong><em>{todayMinutes ? `${todayMinutes} 分钟` : "还没有时长"}</em></article>
+      <article className="stat-card coral"><p>执行中计划</p><strong>{activePlans.length}<small> 个</small></strong><em>个人记录仅你可见</em></article>
+    </section>
+    <section className="page-grid health-layout">
+      <div className="main-column">
+        <article className="card">
+          <div className="card-head"><div><p className="eyebrow">NUTRITION</p><h2>饮食记录</h2></div><details><summary className="primary-button small">＋ 添加饮食</summary><MealForm today={today} /></details></div>
+          <div className="health-list">{meals.map((item) => <div className="health-list-row" key={item.id}>
+            <span className="meal-badge">{mealLabels[item.meal_type]}</span>
+            <div><strong>{item.food}</strong><small>{dateLabel(item.record_date)}{item.notes ? ` · ${item.notes}` : ""}</small><div className="macro-line">{item.calories !== null && <span>{item.calories} kcal</span>}{item.protein_grams !== null && <span>蛋白质 {item.protein_grams}g</span>}{item.carbs_grams !== null && <span>碳水 {item.carbs_grams}g</span>}{item.fat_grams !== null && <span>脂肪 {item.fat_grams}g</span>}</div></div>
+            {item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}
+            <form action={deleteMeal}><input type="hidden" name="id" value={item.id} /><button className="icon-button" aria-label={`删除 ${item.food}`}>×</button></form>
+          </div>)}{!meals.length && <p className="muted list-empty">还没有饮食记录。可以从网页添加，也可以让 ChatGPT 帮你记。</p>}</div>
+        </article>
+        <article className="card">
+          <div className="card-head"><div><p className="eyebrow">PERSONAL TRAINING</p><h2>每日训练</h2></div><details><summary className="primary-button small">＋ 添加训练</summary><TrainingEntryForm today={today} /></details></div>
+          <div className="health-list">{trainingEntries.map((item) => <div className={`health-list-row training-record ${item.completed ? "completed" : ""}`} key={item.id}>
+            <form action={toggleTrainingEntry}><input type="hidden" name="id" value={item.id} /><button className="check-button" aria-label="切换训练完成状态">{item.completed ? "✓" : ""}</button></form>
+            <div><strong>{item.activity}</strong><small>{dateLabel(item.record_date)}{item.duration_minutes ? ` · ${item.duration_minutes} 分钟` : ""}{item.notes ? ` · ${item.notes}` : ""}</small></div>
+            {item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}
+            <form action={deleteTrainingEntry}><input type="hidden" name="id" value={item.id} /><button className="icon-button" aria-label={`删除 ${item.activity}`}>×</button></form>
+          </div>)}{!trainingEntries.length && <p className="muted list-empty">还没有个人训练记录。</p>}</div>
+        </article>
+      </div>
+      <aside className="side-column">
+        <article className="card">
+          <div className="card-head"><div><p className="eyebrow">TRAINING PLANS</p><h2>训练计划</h2></div><details><summary className="mini-add">＋</summary><TrainingPlanForm today={today} /></details></div>
+          <div className="plan-list">{trainingPlans.map((plan) => <article className={plan.active ? "active" : ""} key={plan.id}>
+            <header><strong>{plan.title}</strong>{plan.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}</header>
+            <small>{plan.start_date}{plan.end_date ? ` → ${plan.end_date}` : " 起"}</small>
+            <p>{plan.content}</p>
+            <div><form action={toggleTrainingPlan}><input type="hidden" name="id" value={plan.id} /><button className="text-button">{plan.active ? "标记完成" : "重新启用"}</button></form><form action={deleteTrainingPlan}><input type="hidden" name="id" value={plan.id} /><button className="text-button danger">删除</button></form></div>
+          </article>)}{!trainingPlans.length && <p className="muted list-empty">还没有训练计划。</p>}</div>
+        </article>
+        <article className="privacy-note"><strong>同步说明</strong><p>普通 ChatGPT 对话不会被网站读取。只有你明确调用“并肩健康”工具时，相关字段才会写入本站。</p></article>
+      </aside>
+    </section>
+  </>;
+}
+
+function MealForm({ today }: { today: string }) {
+  return <form action={saveMeal} className="popover-form"><h3>添加饮食</h3><div className="form-grid"><label>日期<input name="date" type="date" defaultValue={today} required /></label><label>餐次<select name="mealType" defaultValue="breakfast"><option value="breakfast">早餐</option><option value="lunch">午餐</option><option value="dinner">晚餐</option><option value="snack">加餐</option></select></label></div><label>吃了什么<textarea name="food" maxLength={500} placeholder="例如：鸡蛋 2 个、燕麦 50g、牛奶 250ml" required /></label><div className="nutrition-grid"><label>热量 kcal<input name="calories" type="number" min="0" /></label><label>蛋白质 g<input name="proteinGrams" type="number" min="0" step="0.1" /></label><label>碳水 g<input name="carbsGrams" type="number" min="0" step="0.1" /></label><label>脂肪 g<input name="fatGrams" type="number" min="0" step="0.1" /></label></div><label>备注<input name="notes" maxLength={300} /></label><button className="primary-button">保存饮食</button></form>;
+}
+
+function TrainingEntryForm({ today }: { today: string }) {
+  return <form action={saveTrainingEntry} className="popover-form"><h3>添加每日训练</h3><label>日期<input name="date" type="date" defaultValue={today} required /></label><label>训练内容<input name="activity" maxLength={200} placeholder="例如：深蹲 5×5 + 慢跑 30 分钟" required /></label><label>总时长（分钟）<input name="durationMinutes" type="number" min="1" max="1440" /></label><label>备注<input name="notes" maxLength={300} /></label><label className="inline-check"><input name="completed" type="checkbox" defaultChecked /> 已完成</label><button className="primary-button">保存训练</button></form>;
+}
+
+function TrainingPlanForm({ today }: { today: string }) {
+  return <form action={saveTrainingPlan} className="popover-form"><h3>新建训练计划</h3><label>计划名称<input name="title" maxLength={100} placeholder="例如：四周增肌计划" required /></label><div className="form-grid"><label>开始日期<input name="startDate" type="date" defaultValue={today} required /></label><label>结束日期<input name="endDate" type="date" /></label></div><label>计划内容<textarea name="content" maxLength={3000} placeholder="例如：周一胸肩，周三腿，周五背臂；每次训练后低强度有氧 20 分钟。" required /></label><button className="primary-button">保存计划</button></form>;
 }
 
 function WorkoutPage({ selectedGroup, workouts, members, today }: { selectedGroup: Group | null; workouts: Workout[]; members: Member[]; today: string }) {

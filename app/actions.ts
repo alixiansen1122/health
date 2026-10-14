@@ -15,6 +15,13 @@ function numberValue(formData: FormData, name: string) {
   return Number(String(formData.get(name) ?? ""));
 }
 
+function optionalNumberValue(formData: FormData, name: string) {
+  const raw = String(formData.get(name) ?? "").trim();
+  if (!raw) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
 function validDate(value: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
@@ -144,6 +151,117 @@ export async function deleteWeight(formData: FormData) {
   await ensureDatabase();
   const id = textValue(formData, "id", 80);
   await getD1().prepare("DELETE FROM weight_entries WHERE id = ? AND user_id = ?").bind(id, user.userId).run();
+  revalidatePath("/");
+}
+
+export async function saveMeal(formData: FormData) {
+  const user = await requireAppUser("/?view=health");
+  await ensureDatabase();
+  const date = textValue(formData, "date", 10);
+  const mealType = textValue(formData, "mealType", 20);
+  const food = textValue(formData, "food", 500);
+  const notes = textValue(formData, "notes", 300);
+  const calories = optionalNumberValue(formData, "calories");
+  const proteinGrams = optionalNumberValue(formData, "proteinGrams");
+  const carbsGrams = optionalNumberValue(formData, "carbsGrams");
+  const fatGrams = optionalNumberValue(formData, "fatGrams");
+  if (!validDate(date) || !["breakfast", "lunch", "dinner", "snack"].includes(mealType) || !food) {
+    throw new Error("请填写有效的日期、餐次和食物内容");
+  }
+  for (const value of [calories, proteinGrams, carbsGrams, fatGrams]) {
+    if (value !== null && value < 0) throw new Error("营养数值不能小于 0");
+  }
+  await getD1().prepare(`INSERT INTO meal_entries
+    (id, user_id, record_date, meal_type, food, calories, protein_grams, carbs_grams, fat_grams, notes, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'web')`)
+    .bind(crypto.randomUUID(), user.userId, date, mealType, food, calories, proteinGrams, carbsGrams, fatGrams, notes)
+    .run();
+  revalidatePath("/");
+}
+
+export async function deleteMeal(formData: FormData) {
+  const user = await requireAppUser("/?view=health");
+  await ensureDatabase();
+  const id = textValue(formData, "id", 80);
+  await getD1().prepare("DELETE FROM meal_entries WHERE id = ? AND user_id = ?")
+    .bind(id, user.userId).run();
+  revalidatePath("/");
+}
+
+export async function saveTrainingEntry(formData: FormData) {
+  const user = await requireAppUser("/?view=health");
+  await ensureDatabase();
+  const date = textValue(formData, "date", 10);
+  const activity = textValue(formData, "activity", 200);
+  const notes = textValue(formData, "notes", 300);
+  const durationMinutes = optionalNumberValue(formData, "durationMinutes");
+  const completed = formData.get("completed") === "on" ? 1 : 0;
+  if (!validDate(date) || !activity || (durationMinutes !== null && (durationMinutes < 1 || durationMinutes > 1440))) {
+    throw new Error("请填写有效的训练日期、项目和时长");
+  }
+  await getD1().prepare(`INSERT INTO training_entries
+    (id, user_id, record_date, activity, duration_minutes, completed, notes, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'web')`)
+    .bind(crypto.randomUUID(), user.userId, date, activity, durationMinutes, completed, notes)
+    .run();
+  revalidatePath("/");
+}
+
+export async function toggleTrainingEntry(formData: FormData) {
+  const user = await requireAppUser("/?view=health");
+  await ensureDatabase();
+  const id = textValue(formData, "id", 80);
+  await getD1().prepare(`UPDATE training_entries
+    SET completed = CASE completed WHEN 1 THEN 0 ELSE 1 END, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND user_id = ?`)
+    .bind(id, user.userId).run();
+  revalidatePath("/");
+}
+
+export async function deleteTrainingEntry(formData: FormData) {
+  const user = await requireAppUser("/?view=health");
+  await ensureDatabase();
+  const id = textValue(formData, "id", 80);
+  await getD1().prepare("DELETE FROM training_entries WHERE id = ? AND user_id = ?")
+    .bind(id, user.userId).run();
+  revalidatePath("/");
+}
+
+export async function saveTrainingPlan(formData: FormData) {
+  const user = await requireAppUser("/?view=health");
+  await ensureDatabase();
+  const title = textValue(formData, "title", 100);
+  const startDate = textValue(formData, "startDate", 10);
+  const endDate = textValue(formData, "endDate", 10);
+  const content = textValue(formData, "content", 3000);
+  if (!title || !validDate(startDate) || (endDate && !validDate(endDate)) || (endDate && endDate < startDate) || !content) {
+    throw new Error("请填写有效的训练计划名称、日期和内容");
+  }
+  await getD1().prepare(`INSERT INTO training_plans
+    (id, user_id, title, start_date, end_date, content, active, source)
+    VALUES (?, ?, ?, ?, ?, ?, 1, 'web')`)
+    .bind(crypto.randomUUID(), user.userId, title, startDate, endDate || null, content)
+    .run();
+  revalidatePath("/");
+}
+
+export async function toggleTrainingPlan(formData: FormData) {
+  const user = await requireAppUser("/?view=health");
+  await ensureDatabase();
+  const id = textValue(formData, "id", 80);
+  await getD1().prepare(`UPDATE training_plans
+    SET active = CASE active WHEN 1 THEN 0 ELSE 1 END, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND user_id = ?`)
+    .bind(id, user.userId).run();
+  revalidatePath("/");
+}
+
+export async function deleteTrainingPlan(formData: FormData) {
+  const user = await requireAppUser("/?view=health");
+  await ensureDatabase();
+  const id = textValue(formData, "id", 80);
+  await getD1().prepare("DELETE FROM training_plans WHERE id = ? AND user_id = ?")
+    .bind(id, user.userId).run();
   revalidatePath("/");
 }
 
