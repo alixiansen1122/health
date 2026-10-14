@@ -115,6 +115,102 @@ function weekDates(weekStart: string) {
   return Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
 }
 
+type ExerciseDisplay = { name: string; detail: string };
+type ParsedNumberedText = { intro: string; exercises: ExerciseDisplay[]; outro: string };
+type PlanDayDisplay = { label: string; title: string; exercises: ExerciseDisplay[]; points: string[] };
+
+function cleanTrainingText(value: string) {
+  return value.replace(/\r/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function trimTrainingPunctuation(value: string) {
+  return value.trim().replace(/^[：:；;、，,。\s]+|[；;。\s]+$/g, "");
+}
+
+function exerciseParts(value: string): ExerciseDisplay {
+  const cleaned = trimTrainingPunctuation(value);
+  const explicit = cleaned.match(/^(.{2,32}?)[：:]\s*(.+)$/);
+  if (explicit) return { name: explicit[1].trim(), detail: explicit[2].trim() };
+  const metric = cleaned.match(/^(.{2,32}?)(?=\s*(?:每只|自重|空杆|器械(?:标示)?|\d+(?:\.\d+)?\s*(?:kg|公斤|次|组|分钟|秒|米|公里)|[×xX]\s*\d))/i);
+  if (!metric) return { name: cleaned, detail: "" };
+  const name = metric[1].trim();
+  return { name, detail: cleaned.slice(metric[1].length).trim() };
+}
+
+function parseNumberedText(value: string): ParsedNumberedText {
+  const normalized = cleanTrainingText(value)
+    .replace(/([：:；;。])\s*(?=\d{1,2}[.、．](?!\d))/g, "$1\n")
+    .replace(/[ \t]+(?=\d{1,2}[.、．](?!\d))/g, "\n");
+  const matcher = /(?:^|\n)\s*(\d{1,2})[.、．]\s*/g;
+  const matches = [...normalized.matchAll(matcher)];
+  if (!matches.length) return { intro: normalized, exercises: [], outro: "" };
+  const intro = trimTrainingPunctuation(normalized.slice(0, matches[0].index));
+  let outro = "";
+  const exercises = matches.map((match, index) => {
+    const start = (match.index ?? 0) + match[0].length;
+    const end = matches[index + 1]?.index ?? normalized.length;
+    let exerciseText = normalized.slice(start, end);
+    if (index === matches.length - 1) {
+      const trailingSection = exerciseText.search(/\n\s*\n/);
+      if (trailingSection >= 0) {
+        outro = trimTrainingPunctuation(exerciseText.slice(trailingSection));
+        exerciseText = exerciseText.slice(0, trailingSection);
+      }
+    }
+    return exerciseParts(exerciseText);
+  }).filter((item) => item.name);
+  return { intro, exercises, outro };
+}
+
+function splitTrainingPoints(value: string) {
+  return cleanTrainingText(value)
+    .split(/\n+|[；;。]+/)
+    .map(trimTrainingPunctuation)
+    .filter(Boolean);
+}
+
+function parseTrainingEntry(activity: string, notes: string) {
+  const activityParts = parseNumberedText(activity);
+  const noteParts = parseNumberedText(notes);
+  const exercises = activityParts.exercises.length ? activityParts.exercises : noteParts.exercises;
+  const heading = activityParts.exercises.length
+    ? activityParts.intro || "本次训练"
+    : noteParts.exercises.length
+      ? activity
+      : activity;
+  const pointSource = activityParts.exercises.length
+    ? [activityParts.outro, notes].filter(Boolean).join("\n")
+    : noteParts.exercises.length
+      ? [noteParts.intro, noteParts.outro].filter(Boolean).join("\n")
+      : notes;
+  return { heading, exercises, points: splitTrainingPoints(pointSource) };
+}
+
+function parseTrainingPlan(content: string) {
+  const normalized = cleanTrainingText(content)
+    .replace(/[ \t]+(?=第\s*[0-9一二三四五六七]+\s*天(?:\s*[|｜:：—-]|\s))/g, "\n")
+    .replace(/[ \t]+(?=\d{1,2}[.、．](?!\d))/g, "\n");
+  const matcher = /(?:^|\n)\s*(第\s*[0-9一二三四五六七]+\s*天)\s*(?:[|｜:：—-]\s*)?([^\n]*)/g;
+  const matches = [...normalized.matchAll(matcher)];
+  if (!matches.length) {
+    const parsed = parseNumberedText(normalized);
+    return { overview: splitTrainingPoints([parsed.intro, parsed.outro].filter(Boolean).join("\n")), days: [] as PlanDayDisplay[], exercises: parsed.exercises };
+  }
+  const overview = splitTrainingPoints(normalized.slice(0, matches[0].index));
+  const days = matches.map((match, index) => {
+    const start = (match.index ?? 0) + match[0].length;
+    const end = matches[index + 1]?.index ?? normalized.length;
+    const parsed = parseNumberedText(normalized.slice(start, end));
+    return {
+      label: match[1].replace(/\s/g, ""),
+      title: trimTrainingPunctuation(match[2]),
+      exercises: parsed.exercises,
+      points: splitTrainingPoints([parsed.intro, parsed.outro].filter(Boolean).join("\n")),
+    };
+  });
+  return { overview, days, exercises: [] as ExerciseDisplay[] };
+}
+
 export default async function Home({ searchParams }: { searchParams: Promise<{ view?: string; group?: string; date?: string }> }) {
   const user = await requireAppUser("/");
   await ensureDatabase();
@@ -303,6 +399,46 @@ function WeekNavigator({ view, weekStart, anchorDate, today, groupId }: { view: 
   </div>;
 }
 
+function ExerciseList({ exercises }: { exercises: ExerciseDisplay[] }) {
+  return <div className="exercise-list">
+    {exercises.map((exercise, index) => <article className="exercise-item" key={`${exercise.name}-${index}`}>
+      <span>{String(index + 1).padStart(2, "0")}</span>
+      <div><strong>{exercise.name}</strong>{exercise.detail && <p>{exercise.detail}</p>}</div>
+    </article>)}
+  </div>;
+}
+
+function TrainingEntryDetails({ item }: { item: TrainingEntry }) {
+  const parsed = parseTrainingEntry(item.activity, item.notes);
+  return <div className="training-entry-body">
+    <div className="training-entry-head">
+      <strong className="training-heading">{parsed.heading}</strong>
+      <span>{parsed.exercises.length ? `${parsed.exercises.length} 个动作` : "训练记录"}</span>
+    </div>
+    {parsed.exercises.length > 0 && <ExerciseList exercises={parsed.exercises} />}
+    <div className="training-meta"><span>{item.duration_minutes ? `${item.duration_minutes} 分钟` : "未填写时长"}</span></div>
+    {parsed.points.length > 0 && <ul className="training-notes">{parsed.points.map((point, index) => <li key={`${point}-${index}`}>{point}</li>)}</ul>}
+  </div>;
+}
+
+function TrainingPlanDetails({ plan }: { plan: TrainingPlan }) {
+  const parsed = parseTrainingPlan(plan.content);
+  return <>
+    {parsed.overview.length > 0 && <section className="plan-overview"><span>计划说明</span><ul>{parsed.overview.map((point, index) => <li key={`${point}-${index}`}>{point}</li>)}</ul></section>}
+    {parsed.exercises.length > 0 && <ExerciseList exercises={parsed.exercises} />}
+    {parsed.days.length > 0 && <div className="plan-days">
+      {parsed.days.map((day, index) => <details className="plan-day" key={`${day.label}-${index}`} open={index === 0}>
+        <summary><span>{day.label}</span><strong>{day.title || "训练安排"}</strong><em>{day.exercises.length ? `${day.exercises.length} 个动作` : `${day.points.length} 项`}</em></summary>
+        <div className="plan-day-content">
+          {day.points.length > 0 && <ul className="training-notes">{day.points.map((point, pointIndex) => <li key={`${point}-${pointIndex}`}>{point}</li>)}</ul>}
+          {day.exercises.length > 0 && <ExerciseList exercises={day.exercises} />}
+        </div>
+      </details>)}
+    </div>}
+    {!parsed.overview.length && !parsed.days.length && !parsed.exercises.length && <p className="muted">暂无计划明细</p>}
+  </>;
+}
+
 function PersonalWorkoutPage({ trainingEntries, trainingPlans, today, anchorDate, weekStart, selectedGroupId }: { trainingEntries: TrainingEntry[]; trainingPlans: TrainingPlan[]; today: string; anchorDate: string; weekStart: string; selectedGroupId?: string }) {
   const dates = weekDates(weekStart);
   const completedCount = trainingEntries.filter((item) => item.completed).length;
@@ -331,7 +467,7 @@ function PersonalWorkoutPage({ trainingEntries, trainingPlans, today, anchorDate
             </header>
             <div className="health-list">{items.map((item) => <div className={`health-list-row training-record ${item.completed ? "completed" : ""}`} key={item.id}>
               <form action={toggleTrainingEntry}><input type="hidden" name="id" value={item.id} /><button className="check-button" aria-label="切换训练完成状态">{item.completed ? "✓" : ""}</button></form>
-              <div><strong>{item.activity}</strong><small>{item.duration_minutes ? `${item.duration_minutes} 分钟` : "未填写时长"}{item.notes ? ` · ${item.notes}` : ""}</small></div>
+              <TrainingEntryDetails item={item} />
               {item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}
               <form action={deleteTrainingEntry}><input type="hidden" name="id" value={item.id} /><button className="icon-button" aria-label={`删除 ${item.activity}`}>×</button></form>
             </div>)}{!items.length && <p className="muted day-empty">暂无训练，点击右上角添加</p>}</div>
@@ -344,8 +480,8 @@ function PersonalWorkoutPage({ trainingEntries, trainingPlans, today, anchorDate
           <div className="plan-list">{trainingPlans.map((plan) => <article className={plan.active ? "active" : ""} key={plan.id}>
             <header><strong>{plan.title}</strong>{plan.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}</header>
             <small>{plan.start_date}{plan.end_date ? ` → ${plan.end_date}` : " 起"}</small>
-            <p>{plan.content}</p>
-            <div><form action={toggleTrainingPlan}><input type="hidden" name="id" value={plan.id} /><button className="text-button">{plan.active ? "标记完成" : "重新启用"}</button></form><form action={deleteTrainingPlan}><input type="hidden" name="id" value={plan.id} /><button className="text-button danger">删除</button></form></div>
+            <TrainingPlanDetails plan={plan} />
+            <div className="plan-actions"><form action={toggleTrainingPlan}><input type="hidden" name="id" value={plan.id} /><button className="text-button">{plan.active ? "标记完成" : "重新启用"}</button></form><form action={deleteTrainingPlan}><input type="hidden" name="id" value={plan.id} /><button className="text-button danger">删除</button></form></div>
           </article>)}{!trainingPlans.length && <p className="muted list-empty">还没有总计划，可在这里添加或让 ChatGPT 保存。</p>}</div>
         </article>
         <article className="privacy-note"><strong>手机同步</strong><p>对 ChatGPT 说“记录今天训练……”会进入对应日期；“保存训练计划……”会进入上方总计划。</p></article>
@@ -422,11 +558,11 @@ function MealForm({ today }: { today: string }) {
 }
 
 function TrainingEntryForm({ today }: { today: string }) {
-  return <form action={saveTrainingEntry} className="popover-form"><h3>添加每日训练</h3><label>日期<input name="date" type="date" defaultValue={today} required /></label><label>训练内容<input name="activity" maxLength={200} placeholder="例如：深蹲 5×5 + 慢跑 30 分钟" required /></label><label>总时长（分钟）<input name="durationMinutes" type="number" min="1" max="1440" /></label><label>备注<input name="notes" maxLength={300} /></label><label className="inline-check"><input name="completed" type="checkbox" defaultChecked /> 已完成</label><button className="primary-button">保存训练</button></form>;
+  return <form action={saveTrainingEntry} className="popover-form"><h3>添加每日训练</h3><label>日期<input name="date" type="date" defaultValue={today} required /></label><label>训练主题<input name="activity" maxLength={200} placeholder="例如：胸 + 肩 + 三头（Push）" required /></label><label>总时长（分钟）<input name="durationMinutes" type="number" min="1" max="1440" /></label><label>动作与备注<textarea name="notes" maxLength={300} placeholder={"1. 平板卧推：40kg × 12次 × 3组\n2. 侧平举：7.5kg × 12次 × 3组"} /></label><label className="inline-check"><input name="completed" type="checkbox" defaultChecked /> 已完成</label><button className="primary-button">保存训练</button></form>;
 }
 
 function TrainingPlanForm({ today }: { today: string }) {
-  return <form action={saveTrainingPlan} className="popover-form"><h3>新建训练计划</h3><label>计划名称<input name="title" maxLength={100} placeholder="例如：四周增肌计划" required /></label><div className="form-grid"><label>开始日期<input name="startDate" type="date" defaultValue={today} required /></label><label>结束日期<input name="endDate" type="date" /></label></div><label>计划内容<textarea name="content" maxLength={3000} placeholder="例如：周一胸肩，周三腿，周五背臂；每次训练后低强度有氧 20 分钟。" required /></label><button className="primary-button">保存计划</button></form>;
+  return <form action={saveTrainingPlan} className="popover-form"><h3>新建训练计划</h3><label>计划名称<input name="title" maxLength={100} placeholder="例如：四周增肌计划" required /></label><div className="form-grid"><label>开始日期<input name="startDate" type="date" defaultValue={today} required /></label><label>结束日期<input name="endDate" type="date" /></label></div><label>计划内容<textarea name="content" maxLength={3000} placeholder={"第1天 | 胸肩三头\n1. 平板卧推：40kg × 12次 × 3组\n2. 侧平举：7.5kg × 12次 × 3组\n\n第2天 | 腿部训练\n1. 深蹲：60kg × 8次 × 4组"} required /></label><button className="primary-button">保存计划</button></form>;
 }
 
 function ExpensePage({ selectedGroup, expenses, members, today, todayTotal, weekTotal, monthTotal }: { selectedGroup: Group | null; expenses: Expense[]; members: Member[]; today: string; todayTotal: number; weekTotal: number; monthTotal: number }) {

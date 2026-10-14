@@ -13,6 +13,8 @@ test("production page replaces the temporary starter", async () => {
   assert.match(page, /健康与运动/);
   assert.match(page, /WeightChart/);
   assert.match(page, /ExpensePage/);
+  assert.match(page, /ExerciseList/);
+  assert.match(page, /plan-day/);
   assert.match(layout, /健康与运动/);
   assert.match(css, /--coral/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);

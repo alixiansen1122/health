@@ -57,15 +57,15 @@ const tools = [
   {
     name: "record_training",
     title: "记录每日训练",
-    description: "把用户个人当天的训练内容写入健康与运动网站的个人运动页，可记录计划中或已完成的训练。",
+    description: "把用户个人当天的训练内容写入健康与运动网站的个人运动页。activity 只写简短训练主题；多个动作请在 notes 中按 1.动作：重量×次数×组数；2.动作：…… 的格式逐项写清，网站会拆分显示。",
     inputSchema: {
       type: "object",
       properties: {
         date: { type: "string", description: "日期，格式 YYYY-MM-DD" },
-        activity: { type: "string", description: "训练项目、组数、次数或距离" },
+        activity: { type: "string", description: "简短训练主题，例如：胸+肩+三头（Push）；不要在此塞入整段动作明细" },
         duration_minutes: { type: "integer", minimum: 1, maximum: 1440 },
         completed: { type: "boolean", description: "是否已经完成，默认 true" },
-        notes: { type: "string" },
+        notes: { type: "string", description: "训练明细或备注；多个动作使用编号格式：1. 动作：重量×次数×组数；2. 动作：……" },
       },
       required: ["date", "activity"],
       additionalProperties: false,
@@ -75,14 +75,14 @@ const tools = [
   {
     name: "save_training_plan",
     title: "保存训练计划",
-    description: "把用户确认过的阶段训练计划保存到健康与运动网站的总运动计划。",
+    description: "把用户确认过的阶段训练计划保存到健康与运动网站的总运动计划，并按训练日和动作拆分显示。",
     inputSchema: {
       type: "object",
       properties: {
         title: { type: "string" },
         start_date: { type: "string", description: "开始日期，格式 YYYY-MM-DD" },
         end_date: { type: "string", description: "可选结束日期，格式 YYYY-MM-DD" },
-        content: { type: "string", description: "完整训练安排" },
+        content: { type: "string", description: "完整训练安排。每个训练日以“第1天 | 训练主题”单独起行，动作以“1. 动作：重量×次数×组数”逐项编号" },
         replace_active: { type: "boolean", description: "是否把旧计划标记为已完成，默认 false" },
       },
       required: ["title", "start_date", "content"],
