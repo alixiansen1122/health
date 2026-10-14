@@ -181,9 +181,14 @@ details { position: relative; }
 .source-badge { padding: 4px 7px; border-radius: 99px; background: #e8f4ef; color: #397563; font-size: 9px; font-style: normal; font-weight: 800; white-space: nowrap; }
 .nutrition-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .plan-list { display: grid; gap: 12px; margin-top: 16px; }
-.plan-list > article { padding: 15px; border: 1px solid var(--line); border-radius: 13px; background: #faf9f5; opacity: .68; }
-.plan-list > article.active { border-color: #abd3c7; background: var(--mint-soft); opacity: 1; }
-.plan-list header { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.plan-list > details { border: 1px solid var(--line); border-radius: 13px; background: #faf9f5; opacity: .68; overflow: hidden; }
+.plan-list > details.active { border-color: #abd3c7; background: var(--mint-soft); opacity: 1; }
+.plan-summary { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 15px; cursor: pointer; list-style: none; }
+.plan-summary::-webkit-details-marker { display: none; }
+.plan-summary > span:last-child { display: flex; align-items: center; gap: 7px; }
+.plan-summary i { color: var(--muted); font-size: 12px; font-style: normal; transition: transform .18s ease; }
+.plan-list > details[open] .plan-summary i { transform: rotate(180deg); }
+.plan-content { padding: 0 15px 15px; }
 .plan-list small { display: block; color: var(--muted); margin-top: 5px; font-size: 10px; }
 .plan-list p { color: #58645e; font-size: 11px; line-height: 1.65; }
 .plan-list .plan-actions { display: flex; justify-content: flex-end; gap: 5px; margin-top: 12px; }
@@ -232,7 +237,10 @@ details { position: relative; }
 .plan-overview { margin-top: 12px; padding: 10px 11px; border-radius: 10px; background: rgba(255,255,255,.68); }
 .plan-overview > span { color: #397563; font-size: 9px; font-weight: 850; letter-spacing: .08em; }
 .plan-overview ul { display: grid; gap: 5px; margin: 7px 0 0; padding-left: 17px; color: #58645e; font-size: 10px; line-height: 1.55; }
-.plan-list > article > .exercise-list { margin-top: 12px; grid-template-columns: 1fr; }
+.plan-content > .exercise-list { margin-top: 12px; grid-template-columns: 1fr; }
+.week-day-card, .meal-day-card, .plan-list > details { content-visibility: auto; contain-intrinsic-size: auto 180px; }
+
+button[aria-busy="true"] { cursor: wait; opacity: .62; }
 .plan-days { display: grid; gap: 7px; margin-top: 12px; }
 .plan-day { border: 1px solid #dfe7e1; border-radius: 11px; background: rgba(255,255,255,.72); overflow: hidden; }
 .plan-day summary { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 10px; cursor: pointer; list-style: none; }

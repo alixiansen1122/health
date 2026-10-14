@@ -22,6 +22,7 @@ import {
   toggleTrainingPlan,
 } from "./actions";
 import { ExpenseBars, WeightChart } from "./charts";
+import { PendingButton } from "./pending-button";
 
 export const dynamic = "force-dynamic";
 
@@ -222,43 +223,79 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
   const weekStart = mondayOfValue(anchorDate);
   const weekEnd = addDays(weekStart, 6);
 
-  const profile = await db.prepare("SELECT * FROM profiles WHERE user_id = ?").bind(user.userId).first<Profile>();
+  // Accepting an invite writes to D1, so only check on the group page instead of
+  // doing two writes on every tab switch.
+  if (view === "group") {
+    const pendingInvite = await db.prepare(`SELECT group_id FROM group_invites
+      WHERE lower(email) = lower(?) AND status = 'pending' LIMIT 1`).bind(user.email).first<{ group_id: string }>();
+    if (pendingInvite) {
+      await db.batch([
+        db.prepare(`INSERT OR IGNORE INTO group_members (group_id, user_id, role)
+          SELECT group_id, ?, 'member' FROM group_invites WHERE lower(email) = lower(?) AND status = 'pending'`)
+          .bind(user.userId, user.email),
+        db.prepare("UPDATE group_invites SET status = 'accepted' WHERE lower(email) = lower(?) AND status = 'pending'")
+          .bind(user.email),
+      ]);
+    }
+  }
+
+  const needsGroups = view === "home" || view === "expenses" || view === "group";
+  const needsWeightHistory = view === "home" || view === "weight";
+  const needsCurrentWeight = view === "health";
+  const needsTraining = view === "home" || view === "workouts";
+
+  // Keep independent reads in one round trip and only request data used by the
+  // active page. Previously every click loaded every feature's tables.
+  const [profile, groups, weights, meals, trainingEntries, trainingPlans] = await Promise.all([
+    db.prepare("SELECT * FROM profiles WHERE user_id = ?").bind(user.userId).first<Profile>(),
+    needsGroups
+      ? db.prepare(`SELECT g.*, gm.role FROM groups g
+          JOIN group_members gm ON gm.group_id = g.id WHERE gm.user_id = ? ORDER BY g.created_at`)
+          .bind(user.userId).all<Group>().then(resultRows)
+      : Promise.resolve([] as Group[]),
+    needsWeightHistory
+      ? db.prepare(`SELECT id, record_date, weight_kg, note FROM weight_entries
+          WHERE user_id = ? ORDER BY record_date ASC`).bind(user.userId).all<Weight>().then(resultRows)
+      : needsCurrentWeight
+        ? db.prepare(`SELECT id, record_date, weight_kg, note FROM weight_entries
+            WHERE user_id = ? ORDER BY record_date DESC LIMIT 1`).bind(user.userId).all<Weight>().then(resultRows)
+        : Promise.resolve([] as Weight[]),
+    view === "health"
+      ? db.prepare(`SELECT * FROM meal_entries WHERE user_id = ? AND record_date BETWEEN ? AND ?
+          ORDER BY record_date ASC, created_at ASC`).bind(user.userId, weekStart, weekEnd).all<Meal>().then(resultRows)
+      : Promise.resolve([] as Meal[]),
+    needsTraining
+      ? db.prepare(`SELECT * FROM training_entries WHERE user_id = ? AND record_date BETWEEN ? AND ?
+          ORDER BY record_date ASC, created_at ASC`).bind(user.userId, weekStart, weekEnd).all<TrainingEntry>().then(resultRows)
+      : Promise.resolve([] as TrainingEntry[]),
+    view === "workouts"
+      ? db.prepare(`SELECT * FROM training_plans WHERE user_id = ?
+          ORDER BY active DESC, start_date DESC, created_at DESC LIMIT 12`).bind(user.userId).all<TrainingPlan>().then(resultRows)
+      : Promise.resolve([] as TrainingPlan[]),
+  ]);
   if (!profile) return <Onboarding email={user.email} suggestedName={user.fullName ?? ""} />;
 
-  await db.batch([
-    db.prepare(`INSERT OR IGNORE INTO group_members (group_id, user_id, role)
-      SELECT group_id, ?, 'member' FROM group_invites WHERE lower(email) = lower(?) AND status = 'pending'`)
-      .bind(user.userId, user.email),
-    db.prepare("UPDATE group_invites SET status = 'accepted' WHERE lower(email) = lower(?) AND status = 'pending'")
-      .bind(user.email),
-  ]);
-
-  const groups = resultRows(await db.prepare(`SELECT g.*, gm.role FROM groups g
-    JOIN group_members gm ON gm.group_id = g.id WHERE gm.user_id = ? ORDER BY g.created_at`).bind(user.userId).all<Group>());
   const selectedGroup = groups.find((item) => item.id === params.group) ?? groups[0] ?? null;
-
-  const weights = resultRows(await db.prepare(`SELECT id, record_date, weight_kg, note
-    FROM weight_entries WHERE user_id = ? ORDER BY record_date ASC`).bind(user.userId).all<Weight>());
-
-  const [meals, trainingEntries, trainingPlans] = await Promise.all([
-    db.prepare(`SELECT * FROM meal_entries WHERE user_id = ? AND record_date BETWEEN ? AND ?
-      ORDER BY record_date ASC, created_at ASC`).bind(user.userId, weekStart, weekEnd).all<Meal>().then(resultRows),
-    db.prepare(`SELECT * FROM training_entries WHERE user_id = ? AND record_date BETWEEN ? AND ?
-      ORDER BY record_date ASC, created_at ASC`).bind(user.userId, weekStart, weekEnd).all<TrainingEntry>().then(resultRows),
-    db.prepare(`SELECT * FROM training_plans WHERE user_id = ?
-      ORDER BY active DESC, start_date DESC, created_at DESC LIMIT 30`).bind(user.userId).all<TrainingPlan>().then(resultRows),
-  ]);
+  const routeGroupId = selectedGroup?.id ?? params.group;
 
   let members: Member[] = [];
   let expenses: Expense[] = [];
   if (selectedGroup) {
+    const monthStart = todayValue.slice(0, 8) + "01";
+    const expenseStart = weekStart < monthStart ? weekStart : monthStart;
     [members, expenses] = await Promise.all([
       db.prepare(`SELECT p.*, gm.role FROM group_members gm JOIN profiles p ON p.user_id = gm.user_id
         WHERE gm.group_id = ? ORDER BY CASE gm.role WHEN 'owner' THEN 0 ELSE 1 END, p.display_name`)
         .bind(selectedGroup.id).all<Member>().then(resultRows),
-      db.prepare(`SELECT e.*, p.display_name FROM expenses e JOIN profiles p ON p.user_id = e.user_id
-        WHERE e.group_id = ? ORDER BY e.purchase_date DESC, e.updated_at DESC LIMIT 200`)
-        .bind(selectedGroup.id).all<Expense>().then(resultRows),
+      view === "home"
+        ? db.prepare(`SELECT e.*, p.display_name FROM expenses e JOIN profiles p ON p.user_id = e.user_id
+            WHERE e.group_id = ? AND e.purchase_date >= ? ORDER BY e.purchase_date DESC, e.updated_at DESC LIMIT 200`)
+            .bind(selectedGroup.id, expenseStart).all<Expense>().then(resultRows)
+        : view === "expenses"
+          ? db.prepare(`SELECT e.*, p.display_name FROM expenses e JOIN profiles p ON p.user_id = e.user_id
+              WHERE e.group_id = ? ORDER BY e.purchase_date DESC, e.updated_at DESC LIMIT 200`)
+              .bind(selectedGroup.id).all<Expense>().then(resultRows)
+          : Promise.resolve([] as Expense[]),
     ]);
   }
 
@@ -277,7 +314,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
         <Link className="brand" href="/"><span className="brand-mark">健</span><span>健康与运动<small>HEALTH &amp; FITNESS</small></span></Link>
         <nav className="side-nav" aria-label="主导航">
           {navItems.map(([key, icon, label]) => (
-            <Link key={key} className={view === key ? "active" : ""} href={queryLink(key, selectedGroup?.id)}>
+            <Link key={key} className={view === key ? "active" : ""} href={queryLink(key, routeGroupId)}>
               <span>{icon}</span>{label}
             </Link>
           ))}
@@ -302,14 +339,14 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
 
         {view === "home" && <Dashboard profile={profile} currentWeight={currentWeight} weightChange={weightChange} weights={weights} upcoming={upcoming} monthExpenses={monthExpenses} members={members} />}
         {view === "weight" && <WeightPage profile={profile} weights={weights} currentWeight={currentWeight} weightChange={weightChange} />}
-        {view === "workouts" && <PersonalWorkoutPage trainingEntries={trainingEntries} trainingPlans={trainingPlans} today={todayValue} anchorDate={anchorDate} weekStart={weekStart} selectedGroupId={selectedGroup?.id} />}
-        {view === "health" && <MealPage meals={meals} profile={profile} currentWeight={currentWeight} today={todayValue} anchorDate={anchorDate} weekStart={weekStart} selectedGroupId={selectedGroup?.id} />}
+        {view === "workouts" && <PersonalWorkoutPage trainingEntries={trainingEntries} trainingPlans={trainingPlans} today={todayValue} anchorDate={anchorDate} weekStart={weekStart} selectedGroupId={routeGroupId} />}
+        {view === "health" && <MealPage meals={meals} profile={profile} currentWeight={currentWeight} today={todayValue} anchorDate={anchorDate} weekStart={weekStart} selectedGroupId={routeGroupId} />}
         {view === "expenses" && <ExpensePage selectedGroup={selectedGroup} expenses={expenses} members={members} today={todayValue} todayTotal={todayExpenses} weekTotal={weekExpenses} monthTotal={monthExpenses} />}
         {view === "group" && <GroupPage selectedGroup={selectedGroup} groups={groups} members={members} profile={profile} />}
       </main>
 
       <nav className="bottom-nav" aria-label="手机导航">
-        {navItems.map(([key, icon, label]) => <Link key={key} className={view === key ? "active" : ""} href={queryLink(key, selectedGroup?.id)}><span>{icon}</span><small>{label}</small></Link>)}
+        {navItems.map(([key, icon, label]) => <Link key={key} className={view === key ? "active" : ""} href={queryLink(key, routeGroupId)}><span>{icon}</span><small>{label}</small></Link>)}
       </nav>
     </div>
   );
@@ -329,13 +366,13 @@ function Onboarding({ email, suggestedName }: { email: string; suggestedName: st
       <label>你的名字<input name="displayName" defaultValue={suggestedName} placeholder="例如：阿力" required maxLength={30} /></label>
       <div className="form-grid"><label>身高（cm）<input name="heightCm" type="number" min="80" max="250" step="0.1" placeholder="175" required /></label><label>当前体重（kg）<input name="weightKg" type="number" min="20" max="400" step="0.1" placeholder="68.5" required /></label></div>
       <label className="check-row"><input name="shareWeight" type="checkbox" /><span><strong>向群组成员展示体重</strong><small>默认关闭，以后可以随时修改</small></span></label>
-      <button className="primary-button" type="submit">开始记录 <span>→</span></button>
+      <PendingButton className="primary-button" type="submit" pendingText="正在创建…">开始记录 <span>→</span></PendingButton>
     </form>
   </main>;
 }
 
 function EmptyGroup() {
-  return <section className="empty-state card"><span className="empty-icon">◎</span><h2>先创建你们的双人群组</h2><p>创建后即可共享运动日历和消费记录。</p><div className="empty-actions"><details><summary className="primary-button">创建群组</summary><form action={createGroup}><label>群组名称<input name="name" placeholder="例如：周末训练搭子" required /></label><button className="primary-button">确认创建</button></form></details><details><summary className="secondary-button">使用邀请码加入</summary><form action={joinGroup}><label>邀请码<input name="inviteCode" placeholder="输入 10 位邀请码" required /></label><button className="primary-button">加入群组</button></form></details></div></section>;
+  return <section className="empty-state card"><span className="empty-icon">◎</span><h2>先创建你们的双人群组</h2><p>创建后即可共享运动日历和消费记录。</p><div className="empty-actions"><details><summary className="primary-button">创建群组</summary><form action={createGroup}><label>群组名称<input name="name" placeholder="例如：周末训练搭子" required /></label><PendingButton className="primary-button" pendingText="创建中…">确认创建</PendingButton></form></details><details><summary className="secondary-button">使用邀请码加入</summary><form action={joinGroup}><label>邀请码<input name="inviteCode" placeholder="输入 10 位邀请码" required /></label><PendingButton className="primary-button" pendingText="加入中…">加入群组</PendingButton></form></details></div></section>;
 }
 
 function Dashboard({ profile, currentWeight, weightChange, weights, upcoming, monthExpenses, members }: { profile: Profile; currentWeight: number; weightChange: number; weights: Weight[]; upcoming: TrainingEntry[]; monthExpenses: number; members: Member[] }) {
@@ -361,14 +398,14 @@ function WeightPage({ profile, weights, currentWeight, weightChange }: { profile
   return <section className="page-grid">
     <div className="main-column">
       <article className="card chart-card large"><div className="card-head"><div><p className="eyebrow">YOUR JOURNEY</p><h2>每日体重</h2></div><details><summary className="primary-button small">＋ 记录体重</summary><WeightForm /></details></div><WeightChart entries={weights} tall /></article>
-      <article className="card"><div className="card-head"><h2>历史记录</h2><span className="pill">{weights.length} 天</span></div><div className="data-list">{[...weights].reverse().map((item) => <div key={item.id}><time>{item.record_date}</time><strong>{item.weight_kg.toFixed(1)} kg</strong><span>{item.note || "—"}</span><form action={deleteWeight}><input type="hidden" name="id" value={item.id} /><button className="icon-button" aria-label={`删除 ${item.record_date} 的体重记录`}>×</button></form></div>)}</div></article>
+      <article className="card"><div className="card-head"><h2>历史记录</h2><span className="pill">{weights.length} 天</span></div><div className="data-list">{[...weights].reverse().map((item) => <div key={item.id}><time>{item.record_date}</time><strong>{item.weight_kg.toFixed(1)} kg</strong><span>{item.note || "—"}</span><form action={deleteWeight}><input type="hidden" name="id" value={item.id} /><PendingButton className="icon-button" pendingText="…" aria-label={`删除 ${item.record_date} 的体重记录`}>×</PendingButton></form></div>)}</div></article>
     </div>
-    <aside className="side-column"><article className="card metric-card"><p>当前体重</p><strong>{currentWeight.toFixed(1)}<small> kg</small></strong><span>累计变化 {weightChange > 0 ? "+" : ""}{weightChange.toFixed(1)} kg</span></article><article className="card metric-card"><p>BMI 参考值</p><strong>{bmi.toFixed(1)}</strong><span>仅作一般记录参考</span></article><article className="card"><h2>个人资料</h2><form action={saveProfile} className="stack-form"><label>名字<input name="displayName" defaultValue={profile.display_name} required /></label><div className="form-grid"><label>身高（cm）<input name="heightCm" type="number" min="80" max="250" step="0.1" defaultValue={profile.height_cm} required /></label><label>当前体重（kg）<input name="weightKg" type="number" min="20" max="400" step="0.1" defaultValue={currentWeight} required /></label></div><label className="inline-check"><input name="shareWeight" type="checkbox" defaultChecked={Boolean(profile.share_weight)} /> 向群友展示当前体重</label><button className="secondary-button">保存资料</button></form></article><article className="privacy-note"><strong>{profile.share_weight ? "群友可以看到你的当前体重" : "你的体重目前仅自己可见"}</strong><p>体重历史始终仅自己可见。</p></article></aside>
+    <aside className="side-column"><article className="card metric-card"><p>当前体重</p><strong>{currentWeight.toFixed(1)}<small> kg</small></strong><span>累计变化 {weightChange > 0 ? "+" : ""}{weightChange.toFixed(1)} kg</span></article><article className="card metric-card"><p>BMI 参考值</p><strong>{bmi.toFixed(1)}</strong><span>仅作一般记录参考</span></article><article className="card"><h2>个人资料</h2><form action={saveProfile} className="stack-form"><label>名字<input name="displayName" defaultValue={profile.display_name} required /></label><div className="form-grid"><label>身高（cm）<input name="heightCm" type="number" min="80" max="250" step="0.1" defaultValue={profile.height_cm} required /></label><label>当前体重（kg）<input name="weightKg" type="number" min="20" max="400" step="0.1" defaultValue={currentWeight} required /></label></div><label className="inline-check"><input name="shareWeight" type="checkbox" defaultChecked={Boolean(profile.share_weight)} /> 向群友展示当前体重</label><PendingButton className="secondary-button" pendingText="保存中…">保存资料</PendingButton></form></article><article className="privacy-note"><strong>{profile.share_weight ? "群友可以看到你的当前体重" : "你的体重目前仅自己可见"}</strong><p>体重历史始终仅自己可见。</p></article></aside>
   </section>;
 }
 
 function WeightForm() {
-  return <form action={saveWeight} className="popover-form"><h3>记录体重</h3><label>日期<input name="date" type="date" defaultValue={chinaToday()} required /></label><label>体重（kg）<input name="weightKg" type="number" min="20" max="400" step="0.1" required /></label><label>备注（选填）<input name="note" maxLength={120} placeholder="例如：晨起空腹" /></label><button className="primary-button">保存记录</button></form>;
+  return <form action={saveWeight} className="popover-form"><h3>记录体重</h3><label>日期<input name="date" type="date" defaultValue={chinaToday()} required /></label><label>体重（kg）<input name="weightKg" type="number" min="20" max="400" step="0.1" required /></label><label>备注（选填）<input name="note" maxLength={120} placeholder="例如：晨起空腹" /></label><PendingButton className="primary-button" pendingText="保存中…">保存记录</PendingButton></form>;
 }
 
 const mealLabels = {
@@ -466,10 +503,10 @@ function PersonalWorkoutPage({ trainingEntries, trainingPlans, today, anchorDate
               <div><small>{items.filter((item) => item.completed).length}/{items.length} 完成</small><details><summary className="mini-add">＋</summary><TrainingEntryForm today={date} /></details></div>
             </header>
             <div className="health-list">{items.map((item) => <div className={`health-list-row training-record ${item.completed ? "completed" : ""}`} key={item.id}>
-              <form action={toggleTrainingEntry}><input type="hidden" name="id" value={item.id} /><button className="check-button" aria-label="切换训练完成状态">{item.completed ? "✓" : ""}</button></form>
+              <form action={toggleTrainingEntry}><input type="hidden" name="id" value={item.id} /><PendingButton className="check-button" pendingText="" aria-label="切换训练完成状态">{item.completed ? "✓" : ""}</PendingButton></form>
               <TrainingEntryDetails item={item} />
               {item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}
-              <form action={deleteTrainingEntry}><input type="hidden" name="id" value={item.id} /><button className="icon-button" aria-label={`删除 ${item.activity}`}>×</button></form>
+              <form action={deleteTrainingEntry}><input type="hidden" name="id" value={item.id} /><PendingButton className="icon-button" pendingText="…" aria-label={`删除 ${item.activity}`}>×</PendingButton></form>
             </div>)}{!items.length && <p className="muted day-empty">暂无训练，点击右上角添加</p>}</div>
           </article>;
         })}
@@ -477,12 +514,12 @@ function PersonalWorkoutPage({ trainingEntries, trainingPlans, today, anchorDate
       <aside className="side-column sticky-column">
         <article className="card">
           <div className="card-head"><div><p className="eyebrow">MASTER PLAN</p><h2>总运动计划</h2></div><details><summary className="mini-add">＋</summary><TrainingPlanForm today={today} /></details></div>
-          <div className="plan-list">{trainingPlans.map((plan) => <article className={plan.active ? "active" : ""} key={plan.id}>
-            <header><strong>{plan.title}</strong>{plan.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}</header>
-            <small>{plan.start_date}{plan.end_date ? ` → ${plan.end_date}` : " 起"}</small>
-            <TrainingPlanDetails plan={plan} />
-            <div className="plan-actions"><form action={toggleTrainingPlan}><input type="hidden" name="id" value={plan.id} /><button className="text-button">{plan.active ? "标记完成" : "重新启用"}</button></form><form action={deleteTrainingPlan}><input type="hidden" name="id" value={plan.id} /><button className="text-button danger">删除</button></form></div>
-          </article>)}{!trainingPlans.length && <p className="muted list-empty">还没有总计划，可在这里添加或让 ChatGPT 保存。</p>}</div>
+          <div className="plan-list">{trainingPlans.map((plan, index) => <details className={plan.active ? "active" : ""} key={plan.id} open={index === 0}>
+            <summary className="plan-summary"><span><strong>{plan.title}</strong><small>{plan.start_date}{plan.end_date ? ` → ${plan.end_date}` : " 起"}</small></span><span>{plan.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}<i>⌄</i></span></summary>
+            <div className="plan-content"><TrainingPlanDetails plan={plan} />
+              <div className="plan-actions"><form action={toggleTrainingPlan}><input type="hidden" name="id" value={plan.id} /><PendingButton className="text-button" pendingText="处理中…">{plan.active ? "标记完成" : "重新启用"}</PendingButton></form><form action={deleteTrainingPlan}><input type="hidden" name="id" value={plan.id} /><PendingButton className="text-button danger" pendingText="删除中…">删除</PendingButton></form></div>
+            </div>
+          </details>)}{!trainingPlans.length && <p className="muted list-empty">还没有总计划，可在这里添加或让 ChatGPT 保存。</p>}</div>
         </article>
         <article className="privacy-note"><strong>手机同步</strong><p>对 ChatGPT 说“记录今天训练……”会进入对应日期；“保存训练计划……”会进入上方总计划。</p></article>
       </aside>
@@ -549,20 +586,20 @@ function MealPage({ meals, profile, currentWeight, today, anchorDate, weekStart,
 function MealRecord({ item, compact = false }: { item: Meal; compact?: boolean }) {
   return <div className={`meal-record ${compact ? "compact" : ""}`}>
     <div><strong>{item.food}</strong><small>{item.calories !== null ? `${item.calories} kcal` : "未填热量"}{item.notes ? ` · ${item.notes}` : ""}</small><div className="macro-line">{item.protein_grams !== null && <span>蛋白质 {item.protein_grams}g</span>}{item.carbs_grams !== null && <span>碳水 {item.carbs_grams}g</span>}{item.fat_grams !== null && <span>脂肪 {item.fat_grams}g</span>}</div></div>
-    <div>{item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}<form action={deleteMeal}><input type="hidden" name="id" value={item.id} /><button className="icon-button" aria-label={`删除 ${item.food}`}>×</button></form></div>
+    <div>{item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}<form action={deleteMeal}><input type="hidden" name="id" value={item.id} /><PendingButton className="icon-button" pendingText="…" aria-label={`删除 ${item.food}`}>×</PendingButton></form></div>
   </div>;
 }
 
 function MealForm({ today }: { today: string }) {
-  return <form action={saveMeal} className="popover-form"><h3>添加饮食</h3><div className="form-grid"><label>日期<input name="date" type="date" defaultValue={today} required /></label><label>餐次<select name="mealType" defaultValue="breakfast"><option value="breakfast">早餐</option><option value="lunch">午餐</option><option value="dinner">晚餐</option><option value="snack">加餐</option></select></label></div><label>吃了什么<textarea name="food" maxLength={500} placeholder="例如：鸡蛋 2 个、燕麦 50g、牛奶 250ml" required /></label><div className="nutrition-grid"><label>热量 kcal<input name="calories" type="number" min="0" /></label><label>蛋白质 g<input name="proteinGrams" type="number" min="0" step="0.1" /></label><label>碳水 g<input name="carbsGrams" type="number" min="0" step="0.1" /></label><label>脂肪 g<input name="fatGrams" type="number" min="0" step="0.1" /></label></div><label>备注<input name="notes" maxLength={300} /></label><button className="primary-button">保存饮食</button></form>;
+  return <form action={saveMeal} className="popover-form"><h3>添加饮食</h3><div className="form-grid"><label>日期<input name="date" type="date" defaultValue={today} required /></label><label>餐次<select name="mealType" defaultValue="breakfast"><option value="breakfast">早餐</option><option value="lunch">午餐</option><option value="dinner">晚餐</option><option value="snack">加餐</option></select></label></div><label>吃了什么<textarea name="food" maxLength={500} placeholder="例如：鸡蛋 2 个、燕麦 50g、牛奶 250ml" required /></label><div className="nutrition-grid"><label>热量 kcal<input name="calories" type="number" min="0" /></label><label>蛋白质 g<input name="proteinGrams" type="number" min="0" step="0.1" /></label><label>碳水 g<input name="carbsGrams" type="number" min="0" step="0.1" /></label><label>脂肪 g<input name="fatGrams" type="number" min="0" step="0.1" /></label></div><label>备注<input name="notes" maxLength={300} /></label><PendingButton className="primary-button" pendingText="保存中…">保存饮食</PendingButton></form>;
 }
 
 function TrainingEntryForm({ today }: { today: string }) {
-  return <form action={saveTrainingEntry} className="popover-form"><h3>添加每日训练</h3><label>日期<input name="date" type="date" defaultValue={today} required /></label><label>训练主题<input name="activity" maxLength={200} placeholder="例如：胸 + 肩 + 三头（Push）" required /></label><label>总时长（分钟）<input name="durationMinutes" type="number" min="1" max="1440" /></label><label>动作与备注<textarea name="notes" maxLength={300} placeholder={"1. 平板卧推：40kg × 12次 × 3组\n2. 侧平举：7.5kg × 12次 × 3组"} /></label><label className="inline-check"><input name="completed" type="checkbox" defaultChecked /> 已完成</label><button className="primary-button">保存训练</button></form>;
+  return <form action={saveTrainingEntry} className="popover-form"><h3>添加每日训练</h3><label>日期<input name="date" type="date" defaultValue={today} required /></label><label>训练主题<input name="activity" maxLength={200} placeholder="例如：胸 + 肩 + 三头（Push）" required /></label><label>总时长（分钟）<input name="durationMinutes" type="number" min="1" max="1440" /></label><label>动作与备注<textarea name="notes" maxLength={300} placeholder={"1. 平板卧推：40kg × 12次 × 3组\n2. 侧平举：7.5kg × 12次 × 3组"} /></label><label className="inline-check"><input name="completed" type="checkbox" defaultChecked /> 已完成</label><PendingButton className="primary-button" pendingText="保存中…">保存训练</PendingButton></form>;
 }
 
 function TrainingPlanForm({ today }: { today: string }) {
-  return <form action={saveTrainingPlan} className="popover-form"><h3>新建训练计划</h3><label>计划名称<input name="title" maxLength={100} placeholder="例如：四周增肌计划" required /></label><div className="form-grid"><label>开始日期<input name="startDate" type="date" defaultValue={today} required /></label><label>结束日期<input name="endDate" type="date" /></label></div><label>计划内容<textarea name="content" maxLength={3000} placeholder={"第1天 | 胸肩三头\n1. 平板卧推：40kg × 12次 × 3组\n2. 侧平举：7.5kg × 12次 × 3组\n\n第2天 | 腿部训练\n1. 深蹲：60kg × 8次 × 4组"} required /></label><button className="primary-button">保存计划</button></form>;
+  return <form action={saveTrainingPlan} className="popover-form"><h3>新建训练计划</h3><label>计划名称<input name="title" maxLength={100} placeholder="例如：四周增肌计划" required /></label><div className="form-grid"><label>开始日期<input name="startDate" type="date" defaultValue={today} required /></label><label>结束日期<input name="endDate" type="date" /></label></div><label>计划内容<textarea name="content" maxLength={3000} placeholder={"第1天 | 胸肩三头\n1. 平板卧推：40kg × 12次 × 3组\n2. 侧平举：7.5kg × 12次 × 3组\n\n第2天 | 腿部训练\n1. 深蹲：60kg × 8次 × 4组"} required /></label><PendingButton className="primary-button" pendingText="保存中…">保存计划</PendingButton></form>;
 }
 
 function ExpensePage({ selectedGroup, expenses, members, today, todayTotal, weekTotal, monthTotal }: { selectedGroup: Group | null; expenses: Expense[]; members: Member[]; today: string; todayTotal: number; weekTotal: number; monthTotal: number }) {
@@ -572,7 +609,7 @@ function ExpensePage({ selectedGroup, expenses, members, today, todayTotal, week
 }
 
 function ExpenseForm({ groupId, members, today, expense }: { groupId: string; members: Member[]; today: string; expense?: Expense }) {
-  return <form action={saveExpense} className="popover-form"><h3>{expense ? "编辑消费" : "添加消费"}</h3><input type="hidden" name="groupId" value={groupId} />{expense && <input type="hidden" name="id" value={expense.id} />}<label>日期<input name="date" type="date" defaultValue={expense?.purchase_date ?? today} required /></label><label>买了什么<input name="item" defaultValue={expense?.item} required maxLength={80} placeholder="例如：瑜伽垫" /></label><div className="form-grid"><label>金额（元）<input name="amount" type="number" min="0.01" max="1000000" step="0.01" defaultValue={expense ? expense.amount_cents / 100 : ""} required /></label><label>消费人<select name="payerId" defaultValue={expense?.user_id}>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name}</option>)}</select></label></div><label>分类<input name="category" defaultValue={expense?.category ?? "其他"} maxLength={20} placeholder="装备 / 补剂 / 会员" /></label><label>备注<input name="notes" defaultValue={expense?.notes} maxLength={200} /></label><button className="primary-button">保存</button></form>;
+  return <form action={saveExpense} className="popover-form"><h3>{expense ? "编辑消费" : "添加消费"}</h3><input type="hidden" name="groupId" value={groupId} />{expense && <input type="hidden" name="id" value={expense.id} />}<label>日期<input name="date" type="date" defaultValue={expense?.purchase_date ?? today} required /></label><label>买了什么<input name="item" defaultValue={expense?.item} required maxLength={80} placeholder="例如：瑜伽垫" /></label><div className="form-grid"><label>金额（元）<input name="amount" type="number" min="0.01" max="1000000" step="0.01" defaultValue={expense ? expense.amount_cents / 100 : ""} required /></label><label>消费人<select name="payerId" defaultValue={expense?.user_id}>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name}</option>)}</select></label></div><label>分类<input name="category" defaultValue={expense?.category ?? "其他"} maxLength={20} placeholder="装备 / 补剂 / 会员" /></label><label>备注<input name="notes" defaultValue={expense?.notes} maxLength={200} /></label><PendingButton className="primary-button" pendingText="保存中…">保存</PendingButton></form>;
 }
 
 function GroupPage({ selectedGroup, groups, members, profile }: { selectedGroup: Group | null; groups: Group[]; members: Member[]; profile: Profile }) {
