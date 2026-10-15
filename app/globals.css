@@ -155,7 +155,7 @@ details { position: relative; }
 .workout-row small { display: block; color: var(--muted); margin-top: 4px; font-size: 11px; }
 .workout-row.completed strong { text-decoration: line-through; color: #98a099; }
 .check-button { width: 25px; height: 25px; border: 2px solid #cfd2cc; border-radius: 7px; background: white; color: white; padding: 0; }
-.completed .check-button { background: var(--mint); border-color: var(--mint); }
+.check-button.filled, .completed .check-button { background: var(--mint); border-color: var(--mint); }
 .workout-row details .popover-form { top: 30px; }
 .delete-form button { width: 100%; border: 0; background: transparent; color: #bd4b3c; font-size: 11px; padding: 8px; }
 
@@ -240,7 +240,8 @@ details { position: relative; }
 .plan-overview > span { color: #397563; font-size: 9px; font-weight: 850; letter-spacing: .08em; }
 .plan-overview ul { display: grid; gap: 5px; margin: 7px 0 0; padding-left: 17px; color: #58645e; font-size: 10px; line-height: 1.55; }
 .plan-content > .exercise-list { margin-top: 12px; grid-template-columns: 1fr; }
-.week-day-card, .meal-day-card, .plan-list > details { content-visibility: auto; contain-intrinsic-size: auto 180px; }
+.plan-list > details { content-visibility: auto; contain-intrinsic-size: auto 180px; }
+.week-day-head details[open] { z-index: 60; }
 
 button[aria-busy="true"] { cursor: wait; opacity: .62; }
 .plan-days { display: grid; gap: 7px; margin-top: 12px; }

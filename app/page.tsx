@@ -24,6 +24,7 @@ import {
 import { ExpenseBars, WeightChart } from "./charts";
 import { PendingButton } from "./pending-button";
 import { ActionForm } from "./action-form";
+import { TrainingToggle } from "./training-toggle";
 
 export const dynamic = "force-dynamic";
 
@@ -548,7 +549,7 @@ function PersonalWorkoutPage({ trainingEntries, trainingPlans, today, anchorDate
               <div><small>{items.filter((item) => item.completed).length}/{items.length} 完成</small><details><summary className="mini-add">＋</summary><TrainingEntryForm today={date} /></details></div>
             </header>
             <div className="health-list">{items.map((item) => <div className={`health-list-row training-record ${item.completed ? "completed" : ""}`} key={item.id}>
-              <form action={toggleTrainingEntry}><input type="hidden" name="id" value={item.id} /><PendingButton className="check-button" pendingText="" aria-label="切换训练完成状态">{item.completed ? "✓" : ""}</PendingButton></form>
+              <TrainingToggle id={item.id} completed={Boolean(item.completed)} action={toggleTrainingEntry} />
               <TrainingEntryDetails item={item} />
               {item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}
               <form action={deleteTrainingEntry}><input type="hidden" name="id" value={item.id} /><PendingButton className="icon-button" pendingText="…" aria-label={`删除 ${item.activity}`}>×</PendingButton></form>
