@@ -5,6 +5,8 @@ import { redirect } from "next/navigation";
 import { requireAppUser } from "./app-auth";
 import { ensureDatabase, getD1 } from "@/db/runtime";
 
+export type ActionState = { ok?: boolean; error?: string } | null;
+
 const today = () =>
   new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Shanghai",
@@ -41,7 +43,7 @@ async function memberGroup(groupId: string, userId: string) {
   return row;
 }
 
-export async function saveProfile(formData: FormData) {
+export async function saveProfile(_state: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireAppUser("/");
   await ensureDatabase();
   const displayName = textValue(formData, "displayName", 30);
@@ -49,9 +51,9 @@ export async function saveProfile(formData: FormData) {
   const weightKg = numberValue(formData, "weightKg");
   const shareWeight = formData.get("shareWeight") === "on" ? 1 : 0;
 
-  if (!displayName || heightCm < 80 || heightCm > 250 || weightKg < 20 || weightKg > 400) {
-    throw new Error("请填写有效的姓名、身高和体重");
-  }
+  const heightValid = Number.isFinite(heightCm) && heightCm >= 80 && heightCm <= 250;
+  const weightValid = Number.isFinite(weightKg) && weightKg >= 20 && weightKg <= 400;
+  if (!displayName || !heightValid || !weightValid) return { error: "请填写有效的姓名、身高和体重" };
 
   const db = getD1();
   await db
@@ -77,14 +79,14 @@ export async function saveProfile(formData: FormData) {
     .run();
 
   revalidatePath("/");
-  redirect("/");
+  return { ok: true };
 }
 
-export async function createGroup(formData: FormData) {
+export async function createGroup(_state: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireAppUser("/");
   await ensureDatabase();
   const name = textValue(formData, "name", 40);
-  if (!name) throw new Error("请输入群组名称");
+  if (!name) return { error: "请输入群组名称" };
   const groupId = crypto.randomUUID();
   const inviteCode = crypto.randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase();
   const db = getD1();
@@ -98,22 +100,23 @@ export async function createGroup(formData: FormData) {
   redirect(`/?group=${groupId}`);
 }
 
-export async function inviteMember(formData: FormData) {
+export async function inviteMember(_state: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireAppUser("/");
   await ensureDatabase();
   const groupId = textValue(formData, "groupId", 80);
   const email = textValue(formData, "email", 120).toLowerCase();
-  const membership = await memberGroup(groupId, user.userId);
-  if (membership.role !== "owner") throw new Error("只有群主可以邀请成员");
-  if (!/^\S+@\S+\.\S+$/.test(email)) throw new Error("请输入有效邮箱");
+  const membership = await memberGroup(groupId, user.userId).catch(() => null);
+  if (!membership) return { error: "你不是该群组成员" };
+  if (membership.role !== "owner") return { error: "只有群主可以邀请成员" };
+  if (!/^\S+@\S+\.\S+$/.test(email)) return { error: "请输入有效邮箱" };
   const status = await getD1().prepare(`SELECT
       (SELECT COUNT(*) FROM group_members WHERE group_id = ?) AS member_count,
       (SELECT COUNT(*) FROM group_members gm JOIN profiles p ON p.user_id = gm.user_id
         WHERE gm.group_id = ? AND lower(p.email) = lower(?)) AS already_member`)
     .bind(groupId, groupId, email)
     .first<{ member_count: number; already_member: number }>();
-  if (status?.already_member) throw new Error("这位朋友已经在群里了");
-  if (!status || status.member_count >= 2) throw new Error("群组已有 2 位成员，无法再邀请");
+  if (status?.already_member) return { error: "这位朋友已经在群里了" };
+  if (!status || status.member_count >= 2) return { error: "群组已有 2 位成员，无法再邀请" };
   await getD1()
     .prepare(`INSERT INTO group_invites (id, group_id, email, invited_by)
       VALUES (?, ?, ?, ?)
@@ -121,9 +124,10 @@ export async function inviteMember(formData: FormData) {
     .bind(crypto.randomUUID(), groupId, email, user.userId)
     .run();
   revalidatePath("/");
+  return { ok: true };
 }
 
-export async function joinGroup(formData: FormData) {
+export async function joinGroup(_state: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireAppUser("/");
   await ensureDatabase();
   const inviteCode = textValue(formData, "inviteCode", 20).toUpperCase();
@@ -132,7 +136,7 @@ export async function joinGroup(formData: FormData) {
     .prepare("SELECT id FROM groups WHERE invite_code = ?")
     .bind(inviteCode)
     .first<{ id: string }>();
-  if (!group) throw new Error("邀请码不存在");
+  if (!group) return { error: "邀请码不存在" };
   const existing = await db
     .prepare("SELECT 1 AS joined FROM group_members WHERE group_id = ? AND user_id = ?")
     .bind(group.id, user.userId)
@@ -146,18 +150,20 @@ export async function joinGroup(formData: FormData) {
       SELECT ?, ?, 'member' WHERE (SELECT COUNT(*) FROM group_members WHERE group_id = ?) < 2`)
     .bind(group.id, user.userId, group.id)
     .run();
-  if (!joined.meta?.changes) throw new Error("该群组已有 2 位成员，无法加入");
+  if (!joined.meta?.changes) return { error: "该群组已有 2 位成员，无法加入" };
   revalidatePath("/");
   redirect(`/?group=${group.id}`);
 }
 
-export async function saveWeight(formData: FormData) {
+export async function saveWeight(_state: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireAppUser("/");
   await ensureDatabase();
   const date = textValue(formData, "date", 10);
   const weightKg = numberValue(formData, "weightKg");
   const note = textValue(formData, "note", 120);
-  if (!validDate(date) || weightKg < 20 || weightKg > 400) throw new Error("请输入有效日期和体重");
+  if (!validDate(date) || !Number.isFinite(weightKg) || weightKg < 20 || weightKg > 400) {
+    return { error: "请输入有效日期和体重" };
+  }
   const db = getD1();
   await db.batch([
     db.prepare(`INSERT INTO weight_entries (id, user_id, record_date, weight_kg, note)
@@ -169,6 +175,7 @@ export async function saveWeight(formData: FormData) {
       .bind(weightKg, user.userId),
   ]);
   revalidatePath("/");
+  return { ok: true };
 }
 
 export async function deleteWeight(formData: FormData) {
@@ -179,7 +186,7 @@ export async function deleteWeight(formData: FormData) {
   revalidatePath("/");
 }
 
-export async function saveMeal(formData: FormData) {
+export async function saveMeal(_state: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireAppUser("/?view=health");
   await ensureDatabase();
   const date = textValue(formData, "date", 10);
@@ -191,10 +198,10 @@ export async function saveMeal(formData: FormData) {
   const carbsGrams = optionalNumberValue(formData, "carbsGrams");
   const fatGrams = optionalNumberValue(formData, "fatGrams");
   if (!validDate(date) || !["breakfast", "lunch", "dinner", "snack"].includes(mealType) || !food) {
-    throw new Error("请填写有效的日期、餐次和食物内容");
+    return { error: "请填写有效的日期、餐次和食物内容" };
   }
   for (const value of [calories, proteinGrams, carbsGrams, fatGrams]) {
-    if (value !== null && value < 0) throw new Error("营养数值不能小于 0");
+    if (value !== null && value < 0) return { error: "营养数值不能小于 0" };
   }
   await getD1().prepare(`INSERT INTO meal_entries
     (id, user_id, record_date, meal_type, food, calories, protein_grams, carbs_grams, fat_grams, notes, source)
@@ -202,6 +209,7 @@ export async function saveMeal(formData: FormData) {
     .bind(crypto.randomUUID(), user.userId, date, mealType, food, calories, proteinGrams, carbsGrams, fatGrams, notes)
     .run();
   revalidatePath("/");
+  return { ok: true };
 }
 
 export async function deleteMeal(formData: FormData) {
@@ -213,7 +221,7 @@ export async function deleteMeal(formData: FormData) {
   revalidatePath("/");
 }
 
-export async function saveTrainingEntry(formData: FormData) {
+export async function saveTrainingEntry(_state: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireAppUser("/?view=workouts");
   await ensureDatabase();
   const date = textValue(formData, "date", 10);
@@ -222,7 +230,7 @@ export async function saveTrainingEntry(formData: FormData) {
   const durationMinutes = optionalNumberValue(formData, "durationMinutes");
   const completed = formData.get("completed") === "on" ? 1 : 0;
   if (!validDate(date) || !activity || (durationMinutes !== null && (durationMinutes < 1 || durationMinutes > 1440))) {
-    throw new Error("请填写有效的训练日期、项目和时长");
+    return { error: "请填写有效的训练日期、项目和时长" };
   }
   await getD1().prepare(`INSERT INTO training_entries
     (id, user_id, record_date, activity, duration_minutes, completed, notes, source)
@@ -230,6 +238,7 @@ export async function saveTrainingEntry(formData: FormData) {
     .bind(crypto.randomUUID(), user.userId, date, activity, durationMinutes, completed, notes)
     .run();
   revalidatePath("/");
+  return { ok: true };
 }
 
 export async function toggleTrainingEntry(formData: FormData) {
@@ -252,7 +261,7 @@ export async function deleteTrainingEntry(formData: FormData) {
   revalidatePath("/");
 }
 
-export async function saveTrainingPlan(formData: FormData) {
+export async function saveTrainingPlan(_state: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireAppUser("/?view=workouts");
   await ensureDatabase();
   const title = textValue(formData, "title", 100);
@@ -260,7 +269,7 @@ export async function saveTrainingPlan(formData: FormData) {
   const endDate = textValue(formData, "endDate", 10);
   const content = textValue(formData, "content", 3000);
   if (!title || !validDate(startDate) || (endDate && !validDate(endDate)) || (endDate && endDate < startDate) || !content) {
-    throw new Error("请填写有效的训练计划名称、日期和内容");
+    return { error: "请填写有效的训练计划名称、日期和内容" };
   }
   await getD1().prepare(`INSERT INTO training_plans
     (id, user_id, title, start_date, end_date, content, active, source)
@@ -268,6 +277,7 @@ export async function saveTrainingPlan(formData: FormData) {
     .bind(crypto.randomUUID(), user.userId, title, startDate, endDate || null, content)
     .run();
   revalidatePath("/");
+  return { ok: true };
 }
 
 export async function toggleTrainingPlan(formData: FormData) {
@@ -290,59 +300,7 @@ export async function deleteTrainingPlan(formData: FormData) {
   revalidatePath("/");
 }
 
-export async function saveWorkout(formData: FormData) {
-  const user = await requireAppUser("/");
-  await ensureDatabase();
-  const id = textValue(formData, "id", 80);
-  const groupId = textValue(formData, "groupId", 80);
-  const assigneeId = textValue(formData, "assigneeId", 80) || user.userId;
-  const date = textValue(formData, "date", 10);
-  const activity = textValue(formData, "activity", 80);
-  const notes = textValue(formData, "notes", 200);
-  const rawDuration = numberValue(formData, "durationMinutes");
-  const duration = Number.isFinite(rawDuration) && rawDuration > 0 ? Math.min(rawDuration, 1440) : null;
-  const completed = formData.get("completed") === "on" ? 1 : 0;
-  await memberGroup(groupId, user.userId);
-  await memberGroup(groupId, assigneeId);
-  if (!validDate(date) || !activity) throw new Error("请填写运动日期和项目");
-  const db = getD1();
-  if (id) {
-    await db.prepare(`UPDATE workouts SET user_id = ?, workout_date = ?, activity = ?,
-      duration_minutes = ?, completed = ?, notes = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND group_id = ?`)
-      .bind(assigneeId, date, activity, duration, completed, notes, user.userId, id, groupId).run();
-  } else {
-    await db.prepare(`INSERT INTO workouts
-      (id, group_id, user_id, workout_date, activity, duration_minutes, completed, notes, created_by, updated_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(crypto.randomUUID(), groupId, assigneeId, date, activity, duration, completed, notes, user.userId, user.userId).run();
-  }
-  revalidatePath("/");
-}
-
-export async function toggleWorkout(formData: FormData) {
-  const user = await requireAppUser("/");
-  await ensureDatabase();
-  const id = textValue(formData, "id", 80);
-  const groupId = textValue(formData, "groupId", 80);
-  await memberGroup(groupId, user.userId);
-  await getD1().prepare(`UPDATE workouts SET completed = CASE completed WHEN 1 THEN 0 ELSE 1 END,
-    updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND group_id = ?`)
-    .bind(user.userId, id, groupId).run();
-  revalidatePath("/");
-}
-
-export async function deleteWorkout(formData: FormData) {
-  const user = await requireAppUser("/");
-  await ensureDatabase();
-  const id = textValue(formData, "id", 80);
-  const groupId = textValue(formData, "groupId", 80);
-  await memberGroup(groupId, user.userId);
-  await getD1().prepare("DELETE FROM workouts WHERE id = ? AND group_id = ?").bind(id, groupId).run();
-  revalidatePath("/");
-}
-
-export async function saveExpense(formData: FormData) {
+export async function saveExpense(_state: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireAppUser("/");
   await ensureDatabase();
   const id = textValue(formData, "id", 80);
@@ -352,11 +310,14 @@ export async function saveExpense(formData: FormData) {
   const item = textValue(formData, "item", 80);
   const category = textValue(formData, "category", 20) || "其他";
   const notes = textValue(formData, "notes", 200);
-  const amountCents = Math.round(numberValue(formData, "amount") * 100);
-  await memberGroup(groupId, user.userId);
-  await memberGroup(groupId, payerId);
+  const amount = numberValue(formData, "amount");
+  const amountCents = Math.round(amount * 100);
+  const membership = await memberGroup(groupId, user.userId).catch(() => null);
+  if (!membership) return { error: "你不是该群组成员" };
+  const payerMembership = await memberGroup(groupId, payerId).catch(() => null);
+  if (!payerMembership) return { error: "消费人不是该群组成员" };
   if (!validDate(date) || !item || !Number.isFinite(amountCents) || amountCents <= 0 || amountCents > 100_000_000) {
-    throw new Error("请填写有效的消费日期、内容和金额");
+    return { error: "请填写有效的消费日期、内容和金额" };
   }
   const db = getD1();
   if (id) {
@@ -370,6 +331,7 @@ export async function saveExpense(formData: FormData) {
       .bind(crypto.randomUUID(), groupId, payerId, date, item, amountCents, category, notes, user.userId).run();
   }
   revalidatePath("/");
+  return { ok: true };
 }
 
 export async function deleteExpense(formData: FormData) {

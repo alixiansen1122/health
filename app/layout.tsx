@@ -15,13 +15,13 @@ export const metadata: Metadata = {
   openGraph: {
     title: "健康与运动",
     description: "记录饮食与运动，看见每天的变化",
-    images: ["/og.png"],
+    images: ["/og.jpg"],
   },
   twitter: {
     card: "summary_large_image",
     title: "健康与运动",
     description: "记录饮食与运动，看见每天的变化",
-    images: ["/og.png"],
+    images: ["/og.jpg"],
   },
 };
 

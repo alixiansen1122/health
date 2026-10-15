@@ -98,20 +98,6 @@ async function createSchema() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`,
-    `CREATE TABLE IF NOT EXISTS workouts (
-      id TEXT PRIMARY KEY,
-      group_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      workout_date TEXT NOT NULL,
-      activity TEXT NOT NULL,
-      duration_minutes INTEGER,
-      completed INTEGER NOT NULL DEFAULT 0,
-      notes TEXT NOT NULL DEFAULT '',
-      created_by TEXT NOT NULL,
-      updated_by TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )`,
     `CREATE TABLE IF NOT EXISTS expenses (
       id TEXT PRIMARY KEY,
       group_id TEXT NOT NULL,
@@ -131,7 +117,6 @@ async function createSchema() {
     `CREATE INDEX IF NOT EXISTS idx_meal_entries_user_date ON meal_entries(user_id, record_date)`,
     `CREATE INDEX IF NOT EXISTS idx_training_entries_user_date ON training_entries(user_id, record_date)`,
     `CREATE INDEX IF NOT EXISTS idx_training_plans_user_active ON training_plans(user_id, active)`,
-    `CREATE INDEX IF NOT EXISTS idx_workouts_group_date ON workouts(group_id, workout_date)`,
     `CREATE INDEX IF NOT EXISTS idx_expenses_group_date ON expenses(group_id, purchase_date)`,
   ];
 

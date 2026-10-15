@@ -145,27 +145,6 @@ export const trainingPlans = sqliteTable(
   (table) => [index("idx_training_plans_user_active").on(table.userId, table.active)],
 );
 
-export const workouts = sqliteTable(
-  "workouts",
-  {
-    id: text("id").primaryKey(),
-    groupId: text("group_id").notNull(),
-    userId: text("user_id").notNull(),
-    workoutDate: text("workout_date").notNull(),
-    activity: text("activity").notNull(),
-    durationMinutes: integer("duration_minutes"),
-    completed: integer("completed", { mode: "boolean" })
-      .notNull()
-      .default(false),
-    notes: text("notes").notNull().default(""),
-    createdBy: text("created_by").notNull(),
-    updatedBy: text("updated_by").notNull(),
-    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-  },
-  (table) => [index("idx_workouts_group_date").on(table.groupId, table.workoutDate)],
-);
-
 export const expenses = sqliteTable(
   "expenses",
   {

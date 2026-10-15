@@ -18,7 +18,7 @@ export function WeightChart({ entries, tall = false }: { entries: WeightEntry[];
   const path = points.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
   const area = `${path} L${points.at(-1)!.x},${height - padY} L${points[0].x},${height - padY} Z`;
   return <div className={`weight-chart ${tall ? "tall" : ""}`}>
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="体重趋势折线图" preserveAspectRatio="none">
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="体重趋势折线图">
       {[0.25, 0.5, 0.75].map((ratio) => <line key={ratio} x1={padX} x2={width - padX} y1={padY + ratio * (height - padY * 2)} y2={padY + ratio * (height - padY * 2)} className="grid-line" />)}
       <path d={area} className="chart-area" /><path d={path} className="chart-line" />
       {points.map((point, index) => <g key={`${point.record_date}-${index}`}><circle cx={point.x} cy={point.y} r={index === points.length - 1 ? 6 : 3.5} className="chart-dot" /><title>{point.record_date} · {point.weight_kg.toFixed(1)} kg</title></g>)}

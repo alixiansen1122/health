@@ -45,3 +45,4 @@ next-env.d.ts
 /work/
 /.site-package-stage/
 /health-site.tar.gz
+*.tar.gz
