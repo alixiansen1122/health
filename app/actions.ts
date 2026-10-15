@@ -5,7 +5,13 @@ import { redirect } from "next/navigation";
 import { requireAppUser } from "./app-auth";
 import { ensureDatabase, getD1 } from "@/db/runtime";
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 
 function textValue(formData: FormData, name: string, max = 200) {
   return String(formData.get(name) ?? "").trim().slice(0, max);
@@ -100,6 +106,14 @@ export async function inviteMember(formData: FormData) {
   const membership = await memberGroup(groupId, user.userId);
   if (membership.role !== "owner") throw new Error("只有群主可以邀请成员");
   if (!/^\S+@\S+\.\S+$/.test(email)) throw new Error("请输入有效邮箱");
+  const status = await getD1().prepare(`SELECT
+      (SELECT COUNT(*) FROM group_members WHERE group_id = ?) AS member_count,
+      (SELECT COUNT(*) FROM group_members gm JOIN profiles p ON p.user_id = gm.user_id
+        WHERE gm.group_id = ? AND lower(p.email) = lower(?)) AS already_member`)
+    .bind(groupId, groupId, email)
+    .first<{ member_count: number; already_member: number }>();
+  if (status?.already_member) throw new Error("这位朋友已经在群里了");
+  if (!status || status.member_count >= 2) throw new Error("群组已有 2 位成员，无法再邀请");
   await getD1()
     .prepare(`INSERT INTO group_invites (id, group_id, email, invited_by)
       VALUES (?, ?, ?, ?)
@@ -113,15 +127,26 @@ export async function joinGroup(formData: FormData) {
   const user = await requireAppUser("/");
   await ensureDatabase();
   const inviteCode = textValue(formData, "inviteCode", 20).toUpperCase();
-  const group = await getD1()
+  const db = getD1();
+  const group = await db
     .prepare("SELECT id FROM groups WHERE invite_code = ?")
     .bind(inviteCode)
     .first<{ id: string }>();
   if (!group) throw new Error("邀请码不存在");
-  await getD1()
-    .prepare("INSERT OR IGNORE INTO group_members (group_id, user_id, role) VALUES (?, ?, 'member')")
+  const existing = await db
+    .prepare("SELECT 1 AS joined FROM group_members WHERE group_id = ? AND user_id = ?")
     .bind(group.id, user.userId)
+    .first();
+  if (existing) {
+    revalidatePath("/");
+    redirect(`/?group=${group.id}`);
+  }
+  const joined = await db
+    .prepare(`INSERT INTO group_members (group_id, user_id, role)
+      SELECT ?, ?, 'member' WHERE (SELECT COUNT(*) FROM group_members WHERE group_id = ?) < 2`)
+    .bind(group.id, user.userId, group.id)
     .run();
+  if (!joined.meta?.changes) throw new Error("该群组已有 2 位成员，无法加入");
   revalidatePath("/");
   redirect(`/?group=${group.id}`);
 }

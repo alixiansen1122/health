@@ -59,6 +59,45 @@ async function createSchema() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`,
+    `CREATE TABLE IF NOT EXISTS meal_entries (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      record_date TEXT NOT NULL,
+      meal_type TEXT NOT NULL CHECK(meal_type IN ('breakfast', 'lunch', 'dinner', 'snack')),
+      food TEXT NOT NULL,
+      calories INTEGER,
+      protein_grams REAL,
+      carbs_grams REAL,
+      fat_grams REAL,
+      notes TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'web' CHECK(source IN ('web', 'chatgpt')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE TABLE IF NOT EXISTS training_entries (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      record_date TEXT NOT NULL,
+      activity TEXT NOT NULL,
+      duration_minutes INTEGER,
+      completed INTEGER NOT NULL DEFAULT 0,
+      notes TEXT NOT NULL DEFAULT '',
+      source TEXT NOT NULL DEFAULT 'web' CHECK(source IN ('web', 'chatgpt')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE TABLE IF NOT EXISTS training_plans (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT,
+      content TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      source TEXT NOT NULL DEFAULT 'web' CHECK(source IN ('web', 'chatgpt')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
     `CREATE TABLE IF NOT EXISTS workouts (
       id TEXT PRIMARY KEY,
       group_id TEXT NOT NULL,
@@ -89,6 +128,9 @@ async function createSchema() {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_group_invites_group_email ON group_invites(group_id, email)`,
     `CREATE INDEX IF NOT EXISTS idx_group_invites_email_status ON group_invites(email, status)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_weight_entries_user_date ON weight_entries(user_id, record_date)`,
+    `CREATE INDEX IF NOT EXISTS idx_meal_entries_user_date ON meal_entries(user_id, record_date)`,
+    `CREATE INDEX IF NOT EXISTS idx_training_entries_user_date ON training_entries(user_id, record_date)`,
+    `CREATE INDEX IF NOT EXISTS idx_training_plans_user_active ON training_plans(user_id, active)`,
     `CREATE INDEX IF NOT EXISTS idx_workouts_group_date ON workouts(group_id, workout_date)`,
     `CREATE INDEX IF NOT EXISTS idx_expenses_group_date ON expenses(group_id, purchase_date)`,
   ];

@@ -156,7 +156,7 @@ async function handleMcpRequest(request: Request, env: Env): Promise<Response> {
 
   let body: JsonRpcRequest;
   try {
-    body = await request.json<JsonRpcRequest>();
+    body = (await request.json()) as JsonRpcRequest;
   } catch {
     return rpcError(null, -32700, "无效的 JSON 请求", 400);
   }

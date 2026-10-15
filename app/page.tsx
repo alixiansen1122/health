@@ -231,10 +231,14 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
     if (pendingInvite) {
       await db.batch([
         db.prepare(`INSERT OR IGNORE INTO group_members (group_id, user_id, role)
-          SELECT group_id, ?, 'member' FROM group_invites WHERE lower(email) = lower(?) AND status = 'pending'`)
+          SELECT gi.group_id, ?, 'member' FROM group_invites gi
+          WHERE lower(gi.email) = lower(?) AND gi.status = 'pending'
+            AND (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = gi.group_id) < 2`)
           .bind(user.userId, user.email),
-        db.prepare("UPDATE group_invites SET status = 'accepted' WHERE lower(email) = lower(?) AND status = 'pending'")
-          .bind(user.email),
+        db.prepare(`UPDATE group_invites SET status = 'accepted'
+          WHERE lower(email) = lower(?) AND status = 'pending'
+            AND group_id IN (SELECT group_id FROM group_members WHERE user_id = ?)`)
+          .bind(user.email, user.userId),
       ]);
     }
   }
@@ -337,7 +341,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
           </div>
         </header>
 
-        {view === "home" && <Dashboard profile={profile} currentWeight={currentWeight} weightChange={weightChange} weights={weights} upcoming={upcoming} monthExpenses={monthExpenses} members={members} />}
+        {view === "home" && <Dashboard profile={profile} groups={groups} currentWeight={currentWeight} weightChange={weightChange} weights={weights} upcoming={upcoming} monthExpenses={monthExpenses} members={members} />}
         {view === "weight" && <WeightPage profile={profile} weights={weights} currentWeight={currentWeight} weightChange={weightChange} />}
         {view === "workouts" && <PersonalWorkoutPage trainingEntries={trainingEntries} trainingPlans={trainingPlans} today={todayValue} anchorDate={anchorDate} weekStart={weekStart} selectedGroupId={routeGroupId} />}
         {view === "health" && <MealPage meals={meals} profile={profile} currentWeight={currentWeight} today={todayValue} anchorDate={anchorDate} weekStart={weekStart} selectedGroupId={routeGroupId} />}
@@ -375,7 +379,7 @@ function EmptyGroup() {
   return <section className="empty-state card"><span className="empty-icon">◎</span><h2>先创建你们的双人群组</h2><p>创建后即可共享运动日历和消费记录。</p><div className="empty-actions"><details><summary className="primary-button">创建群组</summary><form action={createGroup}><label>群组名称<input name="name" placeholder="例如：周末训练搭子" required /></label><PendingButton className="primary-button" pendingText="创建中…">确认创建</PendingButton></form></details><details><summary className="secondary-button">使用邀请码加入</summary><form action={joinGroup}><label>邀请码<input name="inviteCode" placeholder="输入 10 位邀请码" required /></label><PendingButton className="primary-button" pendingText="加入中…">加入群组</PendingButton></form></details></div></section>;
 }
 
-function Dashboard({ profile, currentWeight, weightChange, weights, upcoming, monthExpenses, members }: { profile: Profile; currentWeight: number; weightChange: number; weights: Weight[]; upcoming: TrainingEntry[]; monthExpenses: number; members: Member[] }) {
+function Dashboard({ profile, groups, currentWeight, weightChange, weights, upcoming, monthExpenses, members }: { profile: Profile; groups: Group[]; currentWeight: number; weightChange: number; weights: Weight[]; upcoming: TrainingEntry[]; monthExpenses: number; members: Member[] }) {
   return <>
     <section className="stat-grid">
       <article className="stat-card coral"><span className="stat-icon">↗</span><p>当前体重</p><strong>{currentWeight.toFixed(1)}<small> kg</small></strong><em className={weightChange <= 0 ? "good" : ""}>{weightChange > 0 ? "+" : ""}{weightChange.toFixed(1)} kg 自开始</em></article>
@@ -389,7 +393,7 @@ function Dashboard({ profile, currentWeight, weightChange, weights, upcoming, mo
       </article>
     </section>
     <section className="quote-strip"><span>“</span><p>比昨天更强一点，就已经很好。</p><small>今天也一起完成一件小事吧，{profile.display_name}。</small></section>
-    {!selectedGroup && <EmptyGroup />}
+    {!groups.length && <EmptyGroup />}
   </>;
 }
 
