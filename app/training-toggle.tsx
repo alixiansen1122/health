@@ -26,8 +26,7 @@ export function TrainingRecord({ id, completed, action, details, editForm, after
         <button type="submit" className={`check-button${showCheck ? " filled" : ""}`} aria-label={showCheck ? "标记为未完成并编辑" : "标记为已完成"}>{showCheck ? "✓" : ""}</button>
       </form>
       <div className="training-record-main">
-        {details}
-        {!showCheck && <details className="training-edit"><summary className="text-button">编辑训练内容</summary>{editForm}</details>}
+        {showCheck ? details : editForm}
       </div>
       {after}
     </div>

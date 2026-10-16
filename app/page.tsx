@@ -567,7 +567,7 @@ function PersonalWorkoutPage({ trainingEntries, trainingPlans, today, anchorDate
               completed={Boolean(item.completed)}
               action={toggleTrainingEntry}
               details={<TrainingEntryDetails item={item} />}
-              editForm={<TrainingEntryForm today={item.record_date} item={item} />}
+              editForm={<InlineTrainingEntryForm item={item} />}
               after={<>{item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}<form action={deleteTrainingEntry}><input type="hidden" name="id" value={item.id} /><PendingButton className="icon-button" pendingText="…" aria-label={`删除 ${item.activity}`}>×</PendingButton></form></>}
             />)}{!items.length && <p className="muted day-empty">暂无训练，点击右上角添加</p>}</div>
           </article>;
@@ -658,7 +658,29 @@ function MealForm({ today }: { today: string }) {
 }
 
 function TrainingEntryForm({ today, item }: { today: string; item?: TrainingEntry }) {
-  return <ActionForm action={saveTrainingEntry} className="popover-form"><h3>{item ? "编辑训练" : "添加每日训练"}</h3>{item && <input type="hidden" name="id" value={item.id} />}<label>日期<input name="date" type="date" defaultValue={item?.record_date ?? today} required /></label><label>训练主题<input name="activity" maxLength={200} defaultValue={item?.activity} placeholder="例如：胸 + 肩 + 三头（Push）" required /></label><label>总时长（分钟）<input name="durationMinutes" type="number" min="1" max="1440" defaultValue={item?.duration_minutes ?? ""} /></label><label>动作与备注<textarea name="notes" maxLength={300} defaultValue={item?.notes} placeholder={"1. 平板卧推：40kg × 12次 × 3组\n2. 侧平举：7.5kg × 12次 × 3组"} /></label>{!item && <label className="inline-check"><input name="completed" type="checkbox" defaultChecked /> 已完成</label>}<PendingButton className="primary-button" pendingText="保存中…">{item ? "保存修改" : "保存训练"}</PendingButton></ActionForm>;
+  return <ActionForm action={saveTrainingEntry} className="popover-form"><h3>{item ? "编辑训练" : "添加每日训练"}</h3>{item && <input type="hidden" name="id" value={item.id} />}<label>日期<input name="date" type="date" defaultValue={item?.record_date ?? today} required /></label><label>训练主题<input name="activity" maxLength={5000} defaultValue={item?.activity} placeholder="例如：胸 + 肩 + 三头（Push）" required /></label><label>总时长（分钟）<input name="durationMinutes" type="number" min="1" max="1440" defaultValue={item?.duration_minutes ?? ""} /></label><label>动作与备注<textarea name="notes" maxLength={3000} defaultValue={item?.notes} placeholder={"1. 平板卧推：40kg × 12次 × 3组\n2. 侧平举：7.5kg × 12次 × 3组"} /></label>{!item && <label className="inline-check"><input name="completed" type="checkbox" defaultChecked /> 已完成</label>}<PendingButton className="primary-button" pendingText="保存中…">{item ? "保存修改" : "保存训练"}</PendingButton></ActionForm>;
+}
+
+function InlineTrainingEntryForm({ item }: { item: TrainingEntry }) {
+  const parsed = parseTrainingEntry(item.activity, item.notes);
+  return <ActionForm action={saveTrainingEntry} className="training-inline-form">
+    <input type="hidden" name="id" value={item.id} />
+    <input type="hidden" name="date" value={item.record_date} />
+    <input type="hidden" name="inlineEdit" value="1" />
+    <div className="training-entry-head">
+      <input className="inline-heading-input" aria-label="训练主题" name="heading" maxLength={200} defaultValue={parsed.heading} required />
+      <span>{parsed.exercises.length ? `${parsed.exercises.length} 个动作` : "训练记录"}</span>
+    </div>
+    {parsed.exercises.length > 0 && <div className="exercise-list editable-exercise-list">{parsed.exercises.map((exercise, index) => <article className="exercise-item" key={`${exercise.name}-${index}`}>
+      <span>{String(index + 1).padStart(2, "0")}</span>
+      <div><input aria-label={`动作 ${index + 1} 名称`} name="exerciseName" maxLength={100} defaultValue={exercise.name} required /><textarea aria-label={`动作 ${index + 1} 内容`} name="exerciseDetail" maxLength={500} defaultValue={exercise.detail} rows={2} /></div>
+    </article>)}</div>}
+    <div className="training-inline-footer">
+      <label>时长 <input aria-label="训练时长（分钟）" name="durationMinutes" type="number" min="1" max="1440" defaultValue={item.duration_minutes ?? ""} /><span>分钟</span></label>
+      <PendingButton className="primary-button small" pendingText="保存中…">保存修改</PendingButton>
+    </div>
+    <textarea className="training-notes inline-notes" aria-label="训练备注" name="inlineNotes" maxLength={3000} defaultValue={parsed.points.join("\n")} placeholder="补充训练备注" rows={parsed.points.length ? Math.min(parsed.points.length + 1, 5) : 2} />
+  </ActionForm>;
 }
 
 function TrainingPlanForm({ today }: { today: string }) {

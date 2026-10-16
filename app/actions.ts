@@ -226,8 +226,17 @@ export async function saveTrainingEntry(_state: ActionState, formData: FormData)
   await ensureDatabase();
   const id = textValue(formData, "id", 80);
   const date = textValue(formData, "date", 10);
-  const activity = textValue(formData, "activity", 200);
-  const notes = textValue(formData, "notes", 300);
+  const inlineEdit = formData.get("inlineEdit") === "1";
+  let activity = textValue(formData, "activity", 5000);
+  let notes = textValue(formData, "notes", 3000);
+  if (inlineEdit) {
+    const heading = textValue(formData, "heading", 200);
+    const names = formData.getAll("exerciseName").map((value) => String(value).trim().slice(0, 100));
+    const details = formData.getAll("exerciseDetail").map((value) => String(value).trim().slice(0, 500));
+    const exercises = names.flatMap((name, index) => name ? [`${index + 1}. ${name}${details[index] ? `：${details[index]}` : ""}`] : []);
+    activity = [heading, ...exercises].filter(Boolean).join("\n").slice(0, 5000);
+    notes = textValue(formData, "inlineNotes", 3000);
+  }
   const durationMinutes = optionalNumberValue(formData, "durationMinutes");
   const completed = formData.get("completed") === "on" ? 1 : 0;
   if (!validDate(date) || !activity || (durationMinutes !== null && (durationMinutes < 1 || durationMinutes > 1440))) {

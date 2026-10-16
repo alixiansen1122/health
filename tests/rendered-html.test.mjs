@@ -15,6 +15,8 @@ test("production page replaces the temporary starter", async () => {
   assert.match(page, /WeightChart/);
   assert.match(page, /ExpensePage/);
   assert.match(page, /ExerciseList/);
+  assert.match(page, /InlineTrainingEntryForm/);
+  assert.match(page, /editable-exercise-list/);
   assert.match(page, /plan-day/);
   assert.match(page, /全年查看/);
   assert.match(layout, /健康与运动/);
