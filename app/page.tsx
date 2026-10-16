@@ -24,7 +24,7 @@ import {
 import { ExpenseBars, WeightChart } from "./charts";
 import { PendingButton } from "./pending-button";
 import { ActionForm } from "./action-form";
-import { TrainingToggle } from "./training-toggle";
+import { TrainingRecord } from "./training-toggle";
 
 export const dynamic = "force-dynamic";
 
@@ -548,12 +548,15 @@ function PersonalWorkoutPage({ trainingEntries, trainingPlans, today, anchorDate
               <div><span>{weekDayLabels[index]}</span><strong>{dateLabel(date)}</strong>{date === today && <em>今天</em>}</div>
               <div><small>{items.filter((item) => item.completed).length}/{items.length} 完成</small><details><summary className="mini-add">＋</summary><TrainingEntryForm today={date} /></details></div>
             </header>
-            <div className="health-list">{items.map((item) => <div className={`health-list-row training-record ${item.completed ? "completed" : ""}`} key={item.id}>
-              <TrainingToggle id={item.id} completed={Boolean(item.completed)} action={toggleTrainingEntry} />
-              <TrainingEntryDetails item={item} />
-              {item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}
-              <form action={deleteTrainingEntry}><input type="hidden" name="id" value={item.id} /><PendingButton className="icon-button" pendingText="…" aria-label={`删除 ${item.activity}`}>×</PendingButton></form>
-            </div>)}{!items.length && <p className="muted day-empty">暂无训练，点击右上角添加</p>}</div>
+            <div className="health-list">{items.map((item) => <TrainingRecord
+              key={item.id}
+              id={item.id}
+              completed={Boolean(item.completed)}
+              action={toggleTrainingEntry}
+              details={<TrainingEntryDetails item={item} />}
+              editForm={<TrainingEntryForm today={item.record_date} item={item} />}
+              after={<>{item.source === "chatgpt" && <em className="source-badge">ChatGPT</em>}<form action={deleteTrainingEntry}><input type="hidden" name="id" value={item.id} /><PendingButton className="icon-button" pendingText="…" aria-label={`删除 ${item.activity}`}>×</PendingButton></form></>}
+            />)}{!items.length && <p className="muted day-empty">暂无训练，点击右上角添加</p>}</div>
           </article>;
         })}
       </div>
@@ -641,8 +644,8 @@ function MealForm({ today }: { today: string }) {
   return <ActionForm action={saveMeal} className="popover-form"><h3>添加饮食</h3><div className="form-grid"><label>日期<input name="date" type="date" defaultValue={today} required /></label><label>餐次<select name="mealType" defaultValue="breakfast"><option value="breakfast">早餐</option><option value="lunch">午餐</option><option value="dinner">晚餐</option><option value="snack">加餐</option></select></label></div><label>吃了什么<textarea name="food" maxLength={500} placeholder="例如：鸡蛋 2 个、燕麦 50g、牛奶 250ml" required /></label><div className="nutrition-grid"><label>热量 kcal<input name="calories" type="number" min="0" /></label><label>蛋白质 g<input name="proteinGrams" type="number" min="0" step="0.1" /></label><label>碳水 g<input name="carbsGrams" type="number" min="0" step="0.1" /></label><label>脂肪 g<input name="fatGrams" type="number" min="0" step="0.1" /></label></div><label>备注<input name="notes" maxLength={300} /></label><PendingButton className="primary-button" pendingText="保存中…">保存饮食</PendingButton></ActionForm>;
 }
 
-function TrainingEntryForm({ today }: { today: string }) {
-  return <ActionForm action={saveTrainingEntry} className="popover-form"><h3>添加每日训练</h3><label>日期<input name="date" type="date" defaultValue={today} required /></label><label>训练主题<input name="activity" maxLength={200} placeholder="例如：胸 + 肩 + 三头（Push）" required /></label><label>总时长（分钟）<input name="durationMinutes" type="number" min="1" max="1440" /></label><label>动作与备注<textarea name="notes" maxLength={300} placeholder={"1. 平板卧推：40kg × 12次 × 3组\n2. 侧平举：7.5kg × 12次 × 3组"} /></label><label className="inline-check"><input name="completed" type="checkbox" defaultChecked /> 已完成</label><PendingButton className="primary-button" pendingText="保存中…">保存训练</PendingButton></ActionForm>;
+function TrainingEntryForm({ today, item }: { today: string; item?: TrainingEntry }) {
+  return <ActionForm action={saveTrainingEntry} className="popover-form"><h3>{item ? "编辑训练" : "添加每日训练"}</h3>{item && <input type="hidden" name="id" value={item.id} />}<label>日期<input name="date" type="date" defaultValue={item?.record_date ?? today} required /></label><label>训练主题<input name="activity" maxLength={200} defaultValue={item?.activity} placeholder="例如：胸 + 肩 + 三头（Push）" required /></label><label>总时长（分钟）<input name="durationMinutes" type="number" min="1" max="1440" defaultValue={item?.duration_minutes ?? ""} /></label><label>动作与备注<textarea name="notes" maxLength={300} defaultValue={item?.notes} placeholder={"1. 平板卧推：40kg × 12次 × 3组\n2. 侧平举：7.5kg × 12次 × 3组"} /></label>{!item && <label className="inline-check"><input name="completed" type="checkbox" defaultChecked /> 已完成</label>}<PendingButton className="primary-button" pendingText="保存中…">{item ? "保存修改" : "保存训练"}</PendingButton></ActionForm>;
 }
 
 function TrainingPlanForm({ today }: { today: string }) {

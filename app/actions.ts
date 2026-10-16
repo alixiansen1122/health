@@ -224,6 +224,7 @@ export async function deleteMeal(formData: FormData) {
 export async function saveTrainingEntry(_state: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requireAppUser("/?view=workouts");
   await ensureDatabase();
+  const id = textValue(formData, "id", 80);
   const date = textValue(formData, "date", 10);
   const activity = textValue(formData, "activity", 200);
   const notes = textValue(formData, "notes", 300);
@@ -232,11 +233,19 @@ export async function saveTrainingEntry(_state: ActionState, formData: FormData)
   if (!validDate(date) || !activity || (durationMinutes !== null && (durationMinutes < 1 || durationMinutes > 1440))) {
     return { error: "请填写有效的训练日期、项目和时长" };
   }
-  await getD1().prepare(`INSERT INTO training_entries
-    (id, user_id, record_date, activity, duration_minutes, completed, notes, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'web')`)
-    .bind(crypto.randomUUID(), user.userId, date, activity, durationMinutes, completed, notes)
-    .run();
+  if (id) {
+    await getD1().prepare(`UPDATE training_entries
+      SET record_date = ?, activity = ?, duration_minutes = ?, completed = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND user_id = ?`)
+      .bind(date, activity, durationMinutes, completed, notes, id, user.userId)
+      .run();
+  } else {
+    await getD1().prepare(`INSERT INTO training_entries
+      (id, user_id, record_date, activity, duration_minutes, completed, notes, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'web')`)
+      .bind(crypto.randomUUID(), user.userId, date, activity, durationMinutes, completed, notes)
+      .run();
+  }
   revalidatePath("/");
   return { ok: true };
 }

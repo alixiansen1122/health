@@ -221,12 +221,16 @@ details { position: relative; }
 .day-empty { margin: 0; padding: 20px 0; text-align: center; font-size: 11px; }
 .sticky-column { position: sticky; top: 20px; }
 .training-record { align-items: flex-start; padding: 17px 0; }
+.training-record-main { min-width: 0; }
 .training-entry-body { min-width: 0; display: grid; gap: 10px; }
 .training-entry-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .training-entry-head .training-heading { color: var(--ink); font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
 .training-entry-head > span { flex: 0 0 auto; padding: 4px 7px; border-radius: 99px; background: var(--coral-soft); color: var(--coral); font-size: 9px; font-weight: 800; }
 .training-record.completed .training-heading { color: #98a099; text-decoration: line-through; }
 .training-record.completed .exercise-list { opacity: .68; }
+.training-edit { margin-top: 10px; }
+.training-edit > summary { width: max-content; cursor: pointer; color: var(--coral); font-size: 10px; font-weight: 750; }
+.training-edit .popover-form { position: static; inset: auto; width: 100%; max-height: none; margin-top: 9px; overflow: visible; box-shadow: none; background: var(--paper); }
 .exercise-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .exercise-item { display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 8px; align-items: start; padding: 10px; border: 1px solid #e8e5dc; border-radius: 11px; background: rgba(255,255,255,.72); }
 .exercise-item > span { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 8px; background: var(--yellow-soft); color: #8c6c22; font-size: 9px; font-weight: 850; }
