@@ -71,12 +71,14 @@ const navItems = [
   ["group", "◎", "群组"],
 ] as const;
 
-function queryLink(view: string, groupId?: string, date?: string, month?: string) {
+function queryLink(view: string, groupId?: string, date?: string, month?: string, period?: "month" | "year", year?: string) {
   const params = new URLSearchParams();
   if (view !== "home") params.set("view", view);
   if (groupId) params.set("group", groupId);
   if (date && (view === "workouts" || view === "health")) params.set("date", date);
   if (month && view === "expenses") params.set("month", month);
+  if (period === "year" && view === "expenses") params.set("period", "year");
+  if (year && period === "year" && view === "expenses") params.set("year", year);
   const query = params.toString();
   return query ? `/?${query}` : "/";
 }
@@ -95,6 +97,10 @@ function greetingFor(hour: number) {
 
 function safeMonth(value: string | undefined, fallback: string) {
   return value && /^\d{4}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}-01T12:00:00Z`)) ? value : fallback;
+}
+
+function safeYear(value: string | undefined, fallback: string) {
+  return value && /^\d{4}$/.test(value) && Number(value) >= 2000 && Number(value) <= 2100 ? value : fallback;
 }
 
 function addMonths(month: string, amount: number) {
@@ -241,7 +247,7 @@ function parseTrainingPlan(content: string) {
   return { overview, days, exercises: [] as ExerciseDisplay[] };
 }
 
-export default async function Home({ searchParams }: { searchParams: Promise<{ view?: string; group?: string; date?: string; month?: string }> }) {
+export default async function Home({ searchParams }: { searchParams: Promise<{ view?: string; group?: string; date?: string; month?: string; period?: string; year?: string }> }) {
   const user = await requireAppUser("/");
   await ensureDatabase();
   const db = getD1();
@@ -250,6 +256,8 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
   const todayValue = chinaToday();
   const anchorDate = safeDate(params.date, todayValue);
   const viewMonth = safeMonth(params.month, todayValue.slice(0, 7));
+  const expensePeriod = params.period === "year" ? "year" : "month";
+  const viewYear = safeYear(params.year, viewMonth.slice(0, 4));
   const weekStart = mondayOfValue(anchorDate);
   const weekEnd = addDays(weekStart, 6);
 
@@ -314,11 +322,14 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
 
   let members: Member[] = [];
   let expenses: Expense[] = [];
-  let expenseStats: { today_cents: number; week_cents: number; month_cents: number } | null = null;
+  let expenseStats: { today_cents: number; week_cents: number; month_cents: number; period_cents: number } | null = null;
   if (selectedGroup) {
     const monthStart = todayValue.slice(0, 8) + "01";
     const expenseStart = weekStart < monthStart ? weekStart : monthStart;
     const expenseMonth = monthRange(viewMonth);
+    const expenseRange = expensePeriod === "year"
+      ? { start: `${viewYear}-01-01`, end: `${viewYear}-12-31` }
+      : expenseMonth;
     [members, expenses, expenseStats] = await Promise.all([
       db.prepare(`SELECT p.*, gm.role FROM group_members gm JOIN profiles p ON p.user_id = gm.user_id
         WHERE gm.group_id = ? ORDER BY CASE gm.role WHEN 'owner' THEN 0 ELSE 1 END, p.display_name`)
@@ -329,17 +340,18 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
             .bind(selectedGroup.id, expenseStart).all<Expense>().then(resultRows)
         : view === "expenses"
           ? db.prepare(`SELECT e.*, p.display_name FROM expenses e JOIN profiles p ON p.user_id = e.user_id
-              WHERE e.group_id = ? AND e.purchase_date BETWEEN ? AND ? ORDER BY e.purchase_date DESC, e.updated_at DESC LIMIT 500`)
-              .bind(selectedGroup.id, expenseMonth.start, expenseMonth.end).all<Expense>().then(resultRows)
+              WHERE e.group_id = ? AND e.purchase_date BETWEEN ? AND ? ORDER BY e.purchase_date DESC, e.updated_at DESC LIMIT 2000`)
+              .bind(selectedGroup.id, expenseRange.start, expenseRange.end).all<Expense>().then(resultRows)
           : Promise.resolve([] as Expense[]),
       view === "expenses"
         ? db.prepare(`SELECT
             COALESCE(SUM(CASE WHEN purchase_date = ? THEN amount_cents ELSE 0 END), 0) AS today_cents,
             COALESCE(SUM(CASE WHEN purchase_date >= ? THEN amount_cents ELSE 0 END), 0) AS week_cents,
-            COALESCE(SUM(CASE WHEN purchase_date >= ? THEN amount_cents ELSE 0 END), 0) AS month_cents
+            COALESCE(SUM(CASE WHEN purchase_date >= ? THEN amount_cents ELSE 0 END), 0) AS month_cents,
+            COALESCE(SUM(CASE WHEN purchase_date BETWEEN ? AND ? THEN amount_cents ELSE 0 END), 0) AS period_cents
             FROM expenses WHERE group_id = ?`)
-            .bind(todayValue, weekStart, monthStart, selectedGroup.id)
-            .first<{ today_cents: number; week_cents: number; month_cents: number }>()
+            .bind(todayValue, weekStart, monthStart, expenseRange.start, expenseRange.end, selectedGroup.id)
+            .first<{ today_cents: number; week_cents: number; month_cents: number; period_cents: number }>()
         : Promise.resolve(null),
     ]);
   }
@@ -351,6 +363,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
   const todayExpenses = expenseStats ? expenseStats.today_cents : expenses.filter((item) => item.purchase_date === todayValue).reduce((sum, item) => sum + item.amount_cents, 0);
   const weekExpenses = expenseStats ? expenseStats.week_cents : expenses.filter((item) => item.purchase_date >= weekStart).reduce((sum, item) => sum + item.amount_cents, 0);
   const monthExpenses = expenseStats ? expenseStats.month_cents : expenses.filter((item) => item.purchase_date >= monthStart).reduce((sum, item) => sum + item.amount_cents, 0);
+  const periodExpenses = expenseStats?.period_cents ?? monthExpenses;
   const upcoming = trainingEntries.filter((item) => item.record_date >= todayValue).sort((a, b) => a.record_date.localeCompare(b.record_date));
   const greeting = greetingFor(chinaHour());
 
@@ -387,7 +400,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ v
         {view === "weight" && <WeightPage profile={profile} weights={weights} currentWeight={currentWeight} weightChange={weightChange} />}
         {view === "workouts" && <PersonalWorkoutPage trainingEntries={trainingEntries} trainingPlans={trainingPlans} today={todayValue} anchorDate={anchorDate} weekStart={weekStart} selectedGroupId={routeGroupId} />}
         {view === "health" && <MealPage meals={meals} profile={profile} currentWeight={currentWeight} today={todayValue} anchorDate={anchorDate} weekStart={weekStart} selectedGroupId={routeGroupId} />}
-        {view === "expenses" && <ExpensePage selectedGroup={selectedGroup} expenses={expenses} members={members} today={todayValue} todayTotal={todayExpenses} weekTotal={weekExpenses} monthTotal={monthExpenses} viewMonth={viewMonth} />}
+        {view === "expenses" && <ExpensePage selectedGroup={selectedGroup} expenses={expenses} members={members} today={todayValue} todayTotal={todayExpenses} weekTotal={weekExpenses} periodTotal={periodExpenses} viewMonth={viewMonth} viewYear={viewYear} period={expensePeriod} />}
         {view === "group" && <GroupPage selectedGroup={selectedGroup} groups={groups} members={members} profile={profile} />}
       </main>
 
@@ -652,11 +665,32 @@ function TrainingPlanForm({ today }: { today: string }) {
   return <ActionForm action={saveTrainingPlan} className="popover-form"><h3>新建训练计划</h3><label>计划名称<input name="title" maxLength={100} placeholder="例如：四周增肌计划" required /></label><div className="form-grid"><label>开始日期<input name="startDate" type="date" defaultValue={today} required /></label><label>结束日期<input name="endDate" type="date" /></label></div><label>计划内容<textarea name="content" maxLength={3000} placeholder={"第1天 | 胸肩三头\n1. 平板卧推：40kg × 12次 × 3组\n2. 侧平举：7.5kg × 12次 × 3组\n\n第2天 | 腿部训练\n1. 深蹲：60kg × 8次 × 4组"} required /></label><PendingButton className="primary-button" pendingText="保存中…">保存计划</PendingButton></ActionForm>;
 }
 
-function ExpensePage({ selectedGroup, expenses, members, today, todayTotal, weekTotal, monthTotal, viewMonth }: { selectedGroup: Group | null; expenses: Expense[]; members: Member[]; today: string; todayTotal: number; weekTotal: number; monthTotal: number; viewMonth: string }) {
+function ExpensePage({ selectedGroup, expenses, members, today, todayTotal, weekTotal, periodTotal, viewMonth, viewYear, period }: { selectedGroup: Group | null; expenses: Expense[]; members: Member[]; today: string; todayTotal: number; weekTotal: number; periodTotal: number; viewMonth: string; viewYear: string; period: "month" | "year" }) {
   if (!selectedGroup) return <EmptyGroup />;
   const byMember = members.map((member) => ({ label: member.display_name, value: expenses.filter((item) => item.user_id === member.user_id).reduce((sum, item) => sum + item.amount_cents, 0) }));
   const [year, monthNumber] = viewMonth.split("-");
-  return <section><div className="section-toolbar"><p className="muted">金额以人民币记录</p><details><summary className="primary-button">＋ 添加消费</summary><ExpenseForm groupId={selectedGroup.id} members={members} today={today} /></details></div><div className="stat-grid expense-stats"><article className="stat-card"><p>今日</p><strong>{formatMoney(todayTotal)}</strong></article><article className="stat-card"><p>本周</p><strong>{formatMoney(weekTotal)}</strong></article><article className="stat-card coral"><p>本月</p><strong>{formatMoney(monthTotal)}</strong></article></div><div className="week-toolbar"><div className="week-switcher"><Link aria-label="上一月" href={queryLink("expenses", selectedGroup.id, undefined, addMonths(viewMonth, -1))}>←</Link><strong>{year} 年 {Number(monthNumber)} 月</strong><Link aria-label="下一月" href={queryLink("expenses", selectedGroup.id, undefined, addMonths(viewMonth, 1))}>→</Link><Link className="today-link" href={queryLink("expenses", selectedGroup.id)}>本月</Link></div><span className="pill">{expenses.length} 笔当月记录</span></div><section className="page-grid expenses-layout"><article className="card"><div className="card-head"><h2>消费明细</h2><span className="pill">{expenses.length} 笔</span></div><div className="expense-list">{expenses.map((item) => <div key={item.id}><span className="category-dot">{item.category.slice(0, 1)}</span><div><strong>{item.item}</strong><small>{dateLabel(item.purchase_date)} · {item.display_name} · {item.category}</small></div><b>{formatMoney(item.amount_cents)}</b><details><summary className="icon-button">•••</summary><ExpenseForm groupId={selectedGroup.id} members={members} today={today} expense={item} /><form action={deleteExpense} className="delete-form"><input type="hidden" name="id" value={item.id} /><input type="hidden" name="groupId" value={selectedGroup.id} /><button>删除这笔消费</button></form></details></div>)}{!expenses.length && <p className="muted list-empty">该月还没有消费记录。</p>}</div></article><aside className="side-column"><article className="card"><p className="eyebrow">WHO SPENT WHAT</p><h2>当月成员总金额</h2><ExpenseBars data={byMember} /></article><article className="privacy-note"><strong>统计口径</strong><p>今日按自然日，本周从周一开始，本月按自然月计算；明细与成员合计按上方选择的月份显示。</p></article></aside></section></section>;
+  const isYear = period === "year";
+  const previousHref = isYear
+    ? queryLink("expenses", selectedGroup.id, undefined, undefined, "year", String(Number(viewYear) - 1))
+    : queryLink("expenses", selectedGroup.id, undefined, addMonths(viewMonth, -1));
+  const nextHref = isYear
+    ? queryLink("expenses", selectedGroup.id, undefined, undefined, "year", String(Number(viewYear) + 1))
+    : queryLink("expenses", selectedGroup.id, undefined, addMonths(viewMonth, 1));
+  const currentHref = isYear
+    ? queryLink("expenses", selectedGroup.id, undefined, undefined, "year", today.slice(0, 4))
+    : queryLink("expenses", selectedGroup.id);
+  const periodLabel = isYear ? `${viewYear} 年` : `${year} 年 ${Number(monthNumber)} 月`;
+  const rangeLabel = isYear ? "全年" : "当月";
+
+  return <section>
+    <div className="section-toolbar">
+      <div><p className="muted">金额以人民币记录</p><nav className="expense-period-tabs" aria-label="消费查看范围"><Link className={!isYear ? "active" : ""} href={queryLink("expenses", selectedGroup.id, undefined, viewMonth)}>按月查看</Link><Link className={isYear ? "active" : ""} href={queryLink("expenses", selectedGroup.id, undefined, undefined, "year", viewYear)}>全年查看</Link></nav></div>
+      <details><summary className="primary-button">＋ 添加消费</summary><ExpenseForm groupId={selectedGroup.id} members={members} today={today} /></details>
+    </div>
+    <div className="stat-grid expense-stats"><article className="stat-card"><p>今日</p><strong>{formatMoney(todayTotal)}</strong></article><article className="stat-card"><p>本周</p><strong>{formatMoney(weekTotal)}</strong></article><article className="stat-card coral"><p>{isYear ? `${viewYear} 年` : `${Number(monthNumber)} 月`}</p><strong>{formatMoney(periodTotal)}</strong></article></div>
+    <div className="week-toolbar"><div className="week-switcher"><Link aria-label={isYear ? "上一年" : "上一月"} href={previousHref}>←</Link><strong>{periodLabel}</strong><Link aria-label={isYear ? "下一年" : "下一月"} href={nextHref}>→</Link><Link className="today-link" href={currentHref}>{isYear ? "今年" : "本月"}</Link></div><span className="pill">{expenses.length} 笔{rangeLabel}记录</span></div>
+    <section className="page-grid expenses-layout"><article className="card"><div className="card-head"><h2>{rangeLabel}消费明细</h2><span className="pill">{expenses.length} 笔</span></div><div className="expense-list">{expenses.map((item) => <div key={item.id}><span className="category-dot">{item.category.slice(0, 1)}</span><div><strong>{item.item}</strong><small>{dateLabel(item.purchase_date)} · {item.display_name} · {item.category}</small></div><b>{formatMoney(item.amount_cents)}</b><details><summary className="icon-button">•••</summary><ExpenseForm groupId={selectedGroup.id} members={members} today={today} expense={item} /><form action={deleteExpense} className="delete-form"><input type="hidden" name="id" value={item.id} /><input type="hidden" name="groupId" value={selectedGroup.id} /><button>删除这笔消费</button></form></details></div>)}{!expenses.length && <p className="muted list-empty">该{rangeLabel}还没有消费记录。</p>}</div></article><aside className="side-column"><article className="card"><p className="eyebrow">WHO SPENT WHAT</p><h2>{rangeLabel}成员总金额</h2><ExpenseBars data={byMember} /></article><article className="privacy-note"><strong>统计口径</strong><p>今日按自然日，本周从周一开始；明细、总金额与成员合计按上方选择的{isYear ? "年份" : "月份"}显示。</p></article></aside></section>
+  </section>;
 }
 
 function ExpenseForm({ groupId, members, today, expense }: { groupId: string; members: Member[]; today: string; expense?: Expense }) {
