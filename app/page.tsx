@@ -24,6 +24,7 @@ import {
 import { ExpenseBars, WeightChart } from "./charts";
 import { PendingButton } from "./pending-button";
 import { ActionForm } from "./action-form";
+import { AutoGrowTextarea } from "./auto-grow-textarea";
 import { TrainingRecord } from "./training-toggle";
 
 export const dynamic = "force-dynamic";
@@ -509,7 +510,7 @@ function TrainingEntryDetails({ item }: { item: TrainingEntry }) {
   return <div className="training-entry-body">
     <div className="training-entry-head">
       <strong className="training-heading">{parsed.heading}</strong>
-      <span>{parsed.exercises.length ? `${parsed.exercises.length} 个动作` : "训练记录"}</span>
+      <span>{parsed.exercises.length ? `${parsed.exercises.length} 个动作 · 可编辑` : "可直接编辑"}</span>
     </div>
     {parsed.exercises.length > 0 && <ExerciseList exercises={parsed.exercises} />}
     <div className="training-meta"><span>{item.duration_minutes ? `${item.duration_minutes} 分钟` : "未填写时长"}</span></div>
@@ -673,13 +674,13 @@ function InlineTrainingEntryForm({ item }: { item: TrainingEntry }) {
     </div>
     {parsed.exercises.length > 0 && <div className="exercise-list editable-exercise-list">{parsed.exercises.map((exercise, index) => <article className="exercise-item" key={`${exercise.name}-${index}`}>
       <span>{String(index + 1).padStart(2, "0")}</span>
-      <div><input aria-label={`动作 ${index + 1} 名称`} name="exerciseName" maxLength={100} defaultValue={exercise.name} required /><textarea aria-label={`动作 ${index + 1} 内容`} name="exerciseDetail" maxLength={500} defaultValue={exercise.detail} rows={2} /></div>
+      <div><input aria-label={`动作 ${index + 1} 名称`} name="exerciseName" maxLength={100} defaultValue={exercise.name} required /><AutoGrowTextarea aria-label={`动作 ${index + 1} 内容`} name="exerciseDetail" maxLength={500} defaultValue={exercise.detail} rows={1} /></div>
     </article>)}</div>}
     <div className="training-inline-footer">
       <label>时长 <input aria-label="训练时长（分钟）" name="durationMinutes" type="number" min="1" max="1440" defaultValue={item.duration_minutes ?? ""} /><span>分钟</span></label>
       <PendingButton className="primary-button small" pendingText="保存中…">保存修改</PendingButton>
     </div>
-    <textarea className="training-notes inline-notes" aria-label="训练备注" name="inlineNotes" maxLength={3000} defaultValue={parsed.points.join("\n")} placeholder="补充训练备注" rows={parsed.points.length ? Math.min(parsed.points.length + 1, 5) : 2} />
+    <AutoGrowTextarea className="training-notes inline-notes" aria-label="训练备注" name="inlineNotes" maxLength={3000} defaultValue={parsed.points.join("\n")} placeholder="补充训练备注" rows={1} />
   </ActionForm>;
 }
 

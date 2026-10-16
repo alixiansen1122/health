@@ -235,14 +235,14 @@ details { position: relative; }
 .training-inline-form input, .training-inline-form textarea { transition: border-color .15s ease, background .15s ease; }
 .inline-heading-input { min-width: 0; padding: 4px 6px; margin: -4px -6px; border-color: transparent; background: transparent; color: var(--ink); font-size: 14px; line-height: 1.55; font-weight: 750; }
 .inline-heading-input:hover, .inline-heading-input:focus { border-color: var(--line); background: var(--card); }
-.editable-exercise-list .exercise-item input, .editable-exercise-list .exercise-item textarea { padding: 2px 4px; border-color: transparent; background: transparent; box-shadow: none; }
+.editable-exercise-list .exercise-item input, .editable-exercise-list .exercise-item textarea { padding: 2px 4px; border-color: transparent; background: transparent; box-shadow: none; cursor: text; }
 .editable-exercise-list .exercise-item input { color: var(--ink); font-size: 11px; line-height: 1.45; font-weight: 750; }
-.editable-exercise-list .exercise-item textarea { min-height: 42px; color: var(--muted); font-size: 10px; line-height: 1.55; resize: vertical; }
+.editable-exercise-list .exercise-item textarea { height: auto; min-height: 20px; overflow: hidden; color: var(--muted); font-size: 10px; line-height: 1.55; resize: none; field-sizing: content; }
 .editable-exercise-list .exercise-item input:hover, .editable-exercise-list .exercise-item input:focus, .editable-exercise-list .exercise-item textarea:hover, .editable-exercise-list .exercise-item textarea:focus { border-color: var(--line); background: var(--card); }
 .training-inline-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .training-inline-footer label { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 99px; background: var(--paper); color: var(--muted); font-size: 9px; }
 .training-inline-footer label input { width: 60px; padding: 3px 5px; border-radius: 6px; background: var(--card); }
-.inline-notes { min-height: 54px; padding: 9px 11px; border: 0; border-left: 3px solid var(--yellow); border-radius: 8px; background: var(--yellow-soft); color: #69736e; font-size: 10px; line-height: 1.55; }
+.inline-notes { height: auto; min-height: 38px; overflow: hidden; padding: 9px 11px; border: 0; border-left: 3px solid var(--yellow); border-radius: 8px; background: var(--yellow-soft); color: #69736e; font-size: 10px; line-height: 1.55; resize: none; field-sizing: content; }
 .exercise-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .exercise-item { display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 8px; align-items: start; padding: 10px; border: 1px solid #e8e5dc; border-radius: 11px; background: rgba(255,255,255,.72); }
 .exercise-item > span { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 8px; background: var(--yellow-soft); color: #8c6c22; font-size: 9px; font-weight: 850; }
