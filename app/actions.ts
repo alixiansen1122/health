@@ -263,10 +263,11 @@ export async function toggleTrainingEntry(formData: FormData) {
   const user = await requireAppUser("/?view=workouts");
   await ensureDatabase();
   const id = textValue(formData, "id", 80);
+  const completed = formData.get("completed") === "1" ? 1 : 0;
   await getD1().prepare(`UPDATE training_entries
-    SET completed = CASE completed WHEN 1 THEN 0 ELSE 1 END, updated_at = CURRENT_TIMESTAMP
+    SET completed = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND user_id = ?`)
-    .bind(id, user.userId).run();
+    .bind(completed, id, user.userId).run();
   revalidatePath("/");
 }
 

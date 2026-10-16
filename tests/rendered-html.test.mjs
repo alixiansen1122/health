@@ -3,13 +3,15 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("production page replaces the temporary starter", async () => {
-  const [page, layout, loading, css, packageJson, hosting] = await Promise.all([
+  const [page, layout, loading, css, packageJson, hosting, trainingToggle, actions] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/loading.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
+    readFile(new URL("../app/training-toggle.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/actions.ts", import.meta.url), "utf8"),
   ]);
   assert.match(page, /健康与运动/);
   assert.match(page, /WeightChart/);
@@ -27,4 +29,8 @@ test("production page replaces the temporary starter", async () => {
   assert.doesNotMatch(css, /backdrop-filter/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.match(hosting, /"d1": "DB"/);
+  assert.doesNotMatch(trainingToggle, /useOptimistic/);
+  assert.match(trainingToggle, /useState\(completed\)/);
+  assert.match(trainingToggle, /disabled=\{saving\}/);
+  assert.match(actions, /SET completed = \?, updated_at = CURRENT_TIMESTAMP/);
 });
